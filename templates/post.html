@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{.Post.Title}}</title>
+    <link href="/static/css/forum.css" rel="stylesheet">
+    <link href="/static/css/blog.css" rel="stylesheet">
+  </head>
+  <body>
+    <div class="container">
+      <header class="blog-header py-3">
+        <div class="row flex-nowrap justify-content-between align-items-center">
+          <div class="col-4 pt-1">
+            {{if .User}}
+              <span>Welcome, {{.User.Username}}</span>
+            {{else}}
+              <a class="link-secondary" href="/login">Login</a> |
+              <a class="link-secondary" href="/register">Register</a>
+            {{end}}
+          </div>
+          <div class="col-4 text-center">
+            <a class="blog-header-logo text-dark" href="/">Forum</a>
+          </div>
+          <div class="col-4 d-flex justify-content-end align-items-center">
+            {{if .User}}
+              <a class="btn btn-sm btn-outline-secondary" href="/logout">Logout</a>
+            {{end}}
+          </div>
+        </div>
+      </header>
+      <main class="container">
+        <article class="blog-post">
+          <h2 class="blog-post-title">{{.Post.Title}}</h2>
+          <p class="blog-post-meta">{{.Post.CreatedAt}} by {{.Post.Author}}</p>
+          <p>{{.Post.Content}}</p>
+          <div>
+            <a href="/like/post/{{.Post.ID}}" class="btn btn-sm btn-outline-success">Like ({{.Post.Likes}})</a>
+            <a href="/dislike/post/{{.Post.ID}}" class="btn btn-sm btn-outline-danger">Dislike ({{.Post.Dislikes}})</a>
+          </div>
+        </article>
+        <section>
+          <h4>Comments</h4>
+          {{range .Comments}}
+            <div class="card mb-2">
+              <div class="card-body">
+                <p class="card-text">{{.Content}}</p>
+                <footer class="blockquote-footer">{{.Author}} on {{.CreatedAt}}</footer>
+                <div>
+                  <a href="/like/comment/{{.ID}}" class="btn btn-sm btn-outline-success">Like ({{.Likes}})</a>
+                  <a href="/dislike/comment/{{.ID}}" class="btn btn-sm btn-outline-danger">Dislike ({{.Dislikes}})</a>
+                </div>
+              </div>
+            </div>
+          {{else}}
+            <p>No comments yet.</p>
+          {{end}}
+          {{if .User}}
+            <form method="POST" action="/post/{{.Post.ID}}/comment">
+              <div class="mb-3">
+                <label for="comment" class="form-label">Add a comment</label>
+                <textarea class="form-control" id="comment" name="content" rows="3" required></textarea>
+              </div>
+              <button type="submit" class="btn btn-primary">Submit</button>
+            </form>
+          {{else}}
+            <p><a href="/login">Login</a> to comment.</p>
+          {{end}}
+        </section>
+      </main>
+    </div>
+    <footer class="blog-footer">
+      <p>Forum example using <a href="https://getbootstrap.com/">Bootstrap</a>.</p>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Create Post</title>
+    <link href="/static/css/forum.css" rel="stylesheet">
+    <link href="/static/css/blog.css" rel="stylesheet">
+  </head>
+  <body>
+    <div class="container">
+      <main class="form-signin w-100 m-auto">
+        <form method="POST" action="/create_post">
+          <h1 class="h3 mb-3 fw-normal">Create Post</h1>
+          <div class="form-floating mb-2">
+            <input type="text" class="form-control" id="title" name="title" placeholder="Title" required>
+            <label for="title">Title</label>
+          </div>
+          <div class="form-floating mb-2">
+            <textarea class="form-control" id="content" name="content" placeholder="Content" required></textarea>
+            <label for="content">Content</label>
+          </div>
+          <div class="mb-2">
+            <label>Categories:</label><br>
+            {{range .Categories}}
+              <input type="checkbox" name="categories" value="{{.ID}}"> {{.Name}}<br>
+            {{end}}
+          </div>
+          <button class="w-100 btn btn-lg btn-primary" type="submit">Create</button>
+        </form>
+      </main>
+    </div>
+  </body>
+</html>

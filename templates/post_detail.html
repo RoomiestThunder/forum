@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{.Post.Title}} - Forum</title>
+    <link href="/static/css/forum.css" rel="stylesheet">
+    <link href="/static/css/blog.css" rel="stylesheet">
+  </head>
+  <body>
+    <div class="container">
+      <header class="blog-header py-3">
+        <div class="row flex-nowrap justify-content-between align-items-center">
+          <div class="col-4 pt-1">
+            {{if .User}}
+              <span>Welcome, {{.User.Username}}</span>
+            {{else}}
+              <a class="link-secondary" href="/login">Login</a> |
+              <a class="link-secondary" href="/register">Register</a>
+            {{end}}
+          </div>
+          <div class="col-4 text-center">
+            <a class="blog-header-logo text-dark" href="/">Forum</a>
+          </div>
+          <div class="col-4 d-flex justify-content-end align-items-center">
+            {{if .User}}
+              <a class="btn btn-sm btn-outline-secondary" href="/logout">Logout</a>
+            {{end}}
+          </div>
+        </div>
+      </header>
+      <div class="row g-5">
+        <div class="col-md-8">
+          <article class="blog-post">
+            <h2 class="blog-post-title">{{.Post.Title}}</h2>
+            <p class="blog-post-meta">{{.Post.CreatedAt}} by {{.Post.Author}}
+              {{if .Post.Categories}}|
+                {{range .Post.Categories}}
+                  <a href="/?category={{.ID}}" class="badge bg-secondary text-decoration-none">{{.Name}}</a>
+                {{end}}
+              {{end}}
+            </p>
+            <p>{{.Post.Content}}</p>
+            <div>
+              <a href="/like_post?id={{.Post.ID}}&like=1" class="btn btn-sm btn-outline-success">Like ({{.Post.Likes}})</a>
+              <a href="/like_post?id={{.Post.ID}}&like=0" class="btn btn-sm btn-outline-danger">Dislike ({{.Post.Dislikes}})</a>
+              {{if and .User (eq .User.Username .Post.Author)}}
+                <a href="/edit_post?id={{.Post.ID}}" class="btn btn-sm btn-outline-primary">Edit</a>
+                <a href="/delete_post?id={{.Post.ID}}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this post?');">Delete</a>
+              {{end}}
+            </div>
+          </article>
+          <section class="mt-4">
+            <h4>Comments</h4>
+            {{if .Comments}}
+              {{range .Comments}}
+                <div class="border rounded p-2 mb-2">
+                  <b>{{.Author}}</b> <span class="text-muted">{{.CreatedAt}}</span>
+                  <p>{{.Content}}</p>
+                  <div>
+                    <a href="/like_comment?id={{.ID}}&like=1&post={{$.Post.ID}}" class="btn btn-sm btn-outline-success">Like ({{.Likes}})</a>
+                    <a href="/like_comment?id={{.ID}}&like=0&post={{$.Post.ID}}" class="btn btn-sm btn-outline-danger">Dislike ({{.Dislikes}})</a>
+                    {{if and $.User (eq $.User.Username .Author)}}
+                      <a href="/edit_comment?id={{.ID}}&post={{$.Post.ID}}" class="btn btn-sm btn-outline-primary">Edit</a>
+                      <a href="/delete_comment?id={{.ID}}&post={{$.Post.ID}}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this comment?');">Delete</a>
+                    {{end}}
+                  </div>
+                </div>
+              {{end}}
+            {{else}}
+              <p>No comments yet.</p>
+            {{end}}
+            {{if .User}}
+            <form method="post" class="mt-3">
+              <div class="mb-3">
+                <label for="comment" class="form-label">Add a comment:</label>
+                <textarea class="form-control" id="comment" name="comment" rows="3" maxlength="500" required></textarea>
+              </div>
+              <button type="submit" class="btn btn-primary">Submit</button>
+            </form>
+            {{else}}
+              <p><a href="/login">Login</a> to comment.</p>
+            {{end}}
+          </section>
+        </div>
+      </div>
+    </div>
+    <footer class="blog-footer">
+      <p>Forum example using <a href="https://getbootstrap.com/">Bootstrap</a>.</p>
+    </footer>
+  </body>
+</html>

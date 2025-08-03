@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Comment</title>
+    <link href="/static/css/forum.css" rel="stylesheet">
+    <link href="/static/css/blog.css" rel="stylesheet">
+  </head>
+  <body>
+    <div class="container">
+      <header class="blog-header py-3">
+        <a class="blog-header-logo text-dark" href="/">Forum</a>
+      </header>
+      <div class="row g-5">
+        <div class="col-md-8">
+          <h3>Edit Comment</h3>
+          <form method="post">
+            <div class="mb-3">
+              <label for="content" class="form-label">Comment</label>
+              <textarea class="form-control" id="content" name="content" rows="3" maxlength="500" required>{{.Content}}</textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Save</button>
+            <a href="/post/{{.PostID}}" class="btn btn-secondary">Cancel</a>
+          </form>
+        </div>
+      </div>
+    </div>
+    <footer class="blog-footer">
+      <p>Forum example using <a href="https://getbootstrap.com/">Bootstrap</a>.</p>
+    </footer>
+  </body>
+</html>

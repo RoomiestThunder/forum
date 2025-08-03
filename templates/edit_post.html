@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Post</title>
+    <link href="/static/css/forum.css" rel="stylesheet">
+    <link href="/static/css/blog.css" rel="stylesheet">
+  </head>
+  <body>
+    <div class="container">
+      <main class="form-signin w-100 m-auto">
+        <form method="POST" action="/edit_post?id={{.ID}}">
+          <h1 class="h3 mb-3 fw-normal">Edit Post</h1>
+          <div class="form-floating mb-2">
+            <input type="text" class="form-control" id="title" name="title" placeholder="Title" value="{{.Title}}" maxlength="100" required>
+            <label for="title">Title (max 100 chars)</label>
+          </div>
+          <div class="form-floating mb-2">
+            <textarea class="form-control" id="content" name="content" placeholder="Content" required>{{.Content}}</textarea>
+            <label for="content">Content</label>
+          </div>
+          <button class="w-100 btn btn-lg btn-primary" type="submit">Save</button>
+        </form>
+      </main>
+    </div>
+  </body>
+</html>
