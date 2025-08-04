@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,27 +28,87 @@ func startServer() {
 	// Custom mux for 404 support
 	mux := http.NewServeMux()
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-	mux.HandleFunc("/post/", postDetailHandler)
-	mux.HandleFunc("/edit_comment", editCommentHandler)
-	mux.HandleFunc("/delete_comment", deleteCommentHandler)
-	mux.HandleFunc("/like_comment", likeCommentHandler)
+	mux.HandleFunc("/post/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			render405(w, r)
+			return
+		}
+		postDetailHandler(w, r)
+	})
+	mux.HandleFunc("/edit_comment", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			render405(w, r)
+			return
+		}
+		editCommentHandler(w, r)
+	})
+	mux.HandleFunc("/delete_comment", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			render405(w, r)
+			return
+		}
+		deleteCommentHandler(w, r)
+	})
+	mux.HandleFunc("/like_comment", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			render405(w, r)
+			return
+		}
+		likeCommentHandler(w, r)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/":
+			if r.Method != http.MethodGet {
+				render405(w, r)
+				return
+			}
 			homeHandler(w, r)
 		case "/register":
+			if r.Method != http.MethodGet && r.Method != http.MethodPost {
+				render405(w, r)
+				return
+			}
 			registerHandler(w, r)
 		case "/login":
+			if r.Method != http.MethodGet && r.Method != http.MethodPost {
+				render405(w, r)
+				return
+			}
 			loginHandler(w, r)
 		case "/logout":
+			if r.Method != http.MethodGet {
+				render405(w, r)
+				return
+			}
 			logoutHandler(w, r)
 		case "/create_post":
+			if r.Method != http.MethodGet && r.Method != http.MethodPost {
+				render405(w, r)
+				return
+			}
+			if r.Method == http.MethodGet && len(r.URL.Query()) > 0 {
+				render405(w, r)
+				return
+			}
 			createPostHandler(w, r)
 		case "/like_post":
+			if r.Method != http.MethodGet {
+				render405(w, r)
+				return
+			}
 			likePostHandler(w, r)
 		case "/edit_post":
+			if r.Method != http.MethodGet && r.Method != http.MethodPost {
+				render405(w, r)
+				return
+			}
 			editPostHandler(w, r)
 		case "/delete_post":
+			if r.Method != http.MethodGet {
+				render405(w, r)
+				return
+			}
 			deletePostHandler(w, r)
 		default:
 			render404(w, r)
@@ -63,6 +124,12 @@ func startServer() {
 func render400(w http.ResponseWriter, message string) {
 	w.WriteHeader(http.StatusBadRequest)
 	templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": message})
+}
+
+// Centralized 405 error rendering
+func render405(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Method Not Allowed (405)"})
 }
 
 func render500(w http.ResponseWriter, message string) {
@@ -638,6 +705,11 @@ func createPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
+		q := r.URL.Query()
+		if len(q) > 0 {
+			render405(w, r)
+			return
+		}
 		categories := []Category{}
 		rows, _ := db.Query("SELECT id, name FROM categories")
 		for rows.Next() {
@@ -651,26 +723,48 @@ func createPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		title := r.FormValue("title")
-		content := r.FormValue("content")
+		r.ParseForm()
+		title := strings.TrimSpace(r.Form.Get("title"))
+		content := strings.TrimSpace(r.Form.Get("content"))
 		catIDs := r.Form["categories"]
-		if title == "" || content == "" || len(catIDs) == 0 {
-			templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "All fields and at least one category are required."})
+		emptyCat := false
+		for _, cid := range catIDs {
+			if strings.TrimSpace(cid) == "" {
+				emptyCat = true
+				break
+			}
+		}
+
+		// Проверка: если параметры пустые и в r.Form, и в r.URL.Query, возвращаем 400
+		q := r.URL.Query()
+		qTitle := strings.TrimSpace(q.Get("title"))
+		qContent := strings.TrimSpace(q.Get("content"))
+		qCatIDs := q["categories"]
+		emptyQCat := false
+		for _, cid := range qCatIDs {
+			if strings.TrimSpace(cid) == "" {
+				emptyQCat = true
+				break
+			}
+		}
+		if (title == "" && qTitle == "") || (content == "" && qContent == "") || (len(catIDs) == 0 && len(qCatIDs) == 0) || emptyCat || emptyQCat {
+			render400(w, "All fields and at least one category are required.")
 			return
 		}
 		if len(title) > 20 {
-			templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Title must be 20 characters or less."})
+			render400(w, "Title must be 20 characters or less.")
 			return
 		}
 		res, err := db.Exec("INSERT INTO posts (user_id, title, content, created_at) VALUES (?, ?, ?, ?)", user.ID, title, content, time.Now())
 		if err != nil {
-			templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Error creating post."})
+			render500(w, "Error creating post.")
 			return
 		}
 		postID, _ := res.LastInsertId()
 		for _, cid := range catIDs {
 			db.Exec("INSERT INTO post_categories (post_id, category_id) VALUES (?, ?)", postID, cid)
 		}
+		// После создания поста всегда перенаправляем на главную страницу
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}
 }
