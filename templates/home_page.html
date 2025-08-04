@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Forum Home</title>
@@ -51,6 +52,7 @@
                     <a href="/?category={{.ID}}" class="badge bg-secondary text-decoration-none">{{.Name}}</a>
                   {{end}}
                 {{end}}
+                | <span class="text-muted">Comments: {{.CommentCount}}</span>
               </p>
               <p>{{.Content}}</p>
               <div>
@@ -58,7 +60,10 @@
                 <a href="/like_post?id={{.ID}}&like=0" class="btn btn-sm btn-outline-danger">Dislike ({{.Dislikes}})</a>
                 {{if and $.User (eq $.User.Username .Author)}}
                   <a href="/edit_post?id={{.ID}}" class="btn btn-sm btn-outline-primary">Edit</a>
-                  <a href="/delete_post?id={{.ID}}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this post?');">Delete</a>
+                  <form method="POST" action="/delete_post?id={{.ID}}" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this post?');">
+                      <input type="hidden" name="_method" value="DELETE">
+                      <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                  </form>
                 {{end}}
               </div>
             </article>

@@ -15,6 +15,38 @@ import (
 )
 
 func startServer() {
+	mux := http.NewServeMux()
+	// Запретить доступ ко всему /static и его содержимому
+	// Разрешить только /static/css/ и /static/favicon.ico, остальное запрещено
+	// Запретить прямой доступ к /static/css и /static/css/
+	mux.HandleFunc("/static/css", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("/static/css/", func(w http.ResponseWriter, r *http.Request) {
+		// Если это запрос к папке (без имени файла) — 404
+		if r.URL.Path == "/static/css/" {
+			http.NotFound(w, r)
+			return
+		}
+		// Если это файл — отдаём
+		http.ServeFile(w, r, "static/css"+strings.TrimPrefix(r.URL.Path, "/static/css"))
+	})
+	mux.HandleFunc("/static/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "static/favicon.ico")
+	})
+	mux.HandleFunc("/static", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("403 Forbidden"))
+	})
+	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		// Запретить всё, кроме css и favicon
+		if strings.HasPrefix(r.URL.Path, "/static/css/") || r.URL.Path == "/static/favicon.ico" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("403 Forbidden"))
+	})
 	var err error
 	db, err = sql.Open("sqlite3", "forum.db")
 	if err != nil {
@@ -23,11 +55,6 @@ func startServer() {
 	defer db.Close()
 	initDB()
 
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-
-	// Custom mux for 404 support
-	mux := http.NewServeMux()
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	mux.HandleFunc("/post/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost {
 			render405(w, r)
@@ -35,19 +62,33 @@ func startServer() {
 		}
 		postDetailHandler(w, r)
 	})
+	mux.HandleFunc("/templates", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("403 Forbidden"))
+	})
+	mux.HandleFunc("/templates/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("403 Forbidden"))
+	})
 	mux.HandleFunc("/edit_comment", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodPost {
-			render405(w, r)
+		if r.Method == http.MethodGet {
+			editCommentHandler(w, r)
 			return
 		}
-		editCommentHandler(w, r)
+		r.ParseForm()
+		if r.Method == http.MethodPut || (r.Method == http.MethodPost && r.FormValue("_method") == "PUT") {
+			editCommentHandler(w, r)
+			return
+		}
+		render405(w, r)
 	})
 	mux.HandleFunc("/delete_comment", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodPost {
-			render405(w, r)
+		r.ParseForm()
+		if r.Method == http.MethodDelete || (r.Method == http.MethodPost && r.FormValue("_method") == "DELETE") {
+			deleteCommentHandler(w, r)
 			return
 		}
-		deleteCommentHandler(w, r)
+		render405(w, r)
 	})
 	mux.HandleFunc("/like_comment", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -99,17 +140,23 @@ func startServer() {
 			}
 			likePostHandler(w, r)
 		case "/edit_post":
-			if r.Method != http.MethodGet && r.Method != http.MethodPost {
-				render405(w, r)
+			if r.Method == http.MethodGet {
+				editPostHandler(w, r)
 				return
 			}
-			editPostHandler(w, r)
+			r.ParseForm()
+			if r.Method == http.MethodPut || (r.Method == http.MethodPost && r.FormValue("_method") == "PUT") {
+				editPostHandler(w, r)
+				return
+			}
+			render405(w, r)
 		case "/delete_post":
-			if r.Method != http.MethodGet {
-				render405(w, r)
+			r.ParseForm()
+			if r.Method == http.MethodDelete || (r.Method == http.MethodPost && r.FormValue("_method") == "DELETE") {
+				deletePostHandler(w, r)
 				return
 			}
-			deletePostHandler(w, r)
+			render405(w, r)
 		default:
 			render404(w, r)
 		}
@@ -145,6 +192,7 @@ func render404(w http.ResponseWriter, r *http.Request) {
 
 // Обработчик редактирования поста
 func editPostHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
 	user := getCurrentUser(r)
 	if user == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -162,7 +210,11 @@ func editPostHandler(w http.ResponseWriter, r *http.Request) {
 		render400(w, "Access denied or post not found.")
 		return
 	}
-	if r.Method == http.MethodGet {
+	method := r.Method
+	if method == http.MethodPost && r.FormValue("_method") != "" {
+		method = r.FormValue("_method")
+	}
+	if method == http.MethodGet {
 		var title, content string
 		err := db.QueryRow("SELECT title, content FROM posts WHERE id = ?", postID).Scan(&title, &content)
 		if err != nil {
@@ -173,7 +225,7 @@ func editPostHandler(w http.ResponseWriter, r *http.Request) {
 		templates.ExecuteTemplate(w, "edit_post.html", data)
 		return
 	}
-	if r.Method == http.MethodPost {
+	if method == http.MethodPut {
 		title := r.FormValue("title")
 		content := r.FormValue("content")
 		if title == "" || content == "" {
@@ -251,15 +303,16 @@ type Category struct {
 }
 
 type Post struct {
-	ID         int
-	UserID     int
-	Title      string
-	Content    string
-	CreatedAt  string
-	Author     string
-	Likes      int
-	Dislikes   int
-	Categories []Category // New: categories for this post
+	ID           int
+	UserID       int
+	Title        string
+	Content      string
+	CreatedAt    string
+	Author       string
+	Likes        int
+	Dislikes     int
+	Categories   []Category // New: categories for this post
+	CommentCount int        // Количество комментариев
 }
 
 type Comment struct {
@@ -282,6 +335,7 @@ type Session struct {
 
 // Редактирование комментария
 func editCommentHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
 	user := getCurrentUser(r)
 	if user == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -300,7 +354,11 @@ func editCommentHandler(w http.ResponseWriter, r *http.Request) {
 		render400(w, "Access denied or comment not found.")
 		return
 	}
-	if r.Method == http.MethodGet {
+	method := r.Method
+	if method == http.MethodPost && r.FormValue("_method") != "" {
+		method = r.FormValue("_method")
+	}
+	if method == http.MethodGet {
 		var content string
 		err := db.QueryRow("SELECT content FROM comments WHERE id = ?", commentID).Scan(&content)
 		if err != nil {
@@ -311,7 +369,7 @@ func editCommentHandler(w http.ResponseWriter, r *http.Request) {
 		templates.ExecuteTemplate(w, "edit_comment.html", data)
 		return
 	}
-	if r.Method == http.MethodPost {
+	if method == http.MethodPut {
 		content := r.FormValue("content")
 		if content == "" || len(content) > 500 {
 			render400(w, "Comment must be 1-500 chars.")
@@ -328,9 +386,18 @@ func editCommentHandler(w http.ResponseWriter, r *http.Request) {
 
 // Удаление комментария
 func deleteCommentHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	method := r.Method
+	if method == http.MethodPost && r.FormValue("_method") != "" {
+		method = r.FormValue("_method")
+	}
+	if !(method == http.MethodDelete) {
+		render405(w, r)
+		return
+	}
 	user := getCurrentUser(r)
 	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		render400(w, "Unauthorized.")
 		return
 	}
 	commentID := r.URL.Query().Get("id")
@@ -477,9 +544,18 @@ func postDetailHandler(w http.ResponseWriter, r *http.Request) {
 // --- Handlers and helper functions moved from main.go ---
 
 func deletePostHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	method := r.Method
+	if method == http.MethodPost && r.FormValue("_method") != "" {
+		method = r.FormValue("_method")
+	}
+	if !(method == http.MethodDelete) {
+		render405(w, r)
+		return
+	}
 	user := getCurrentUser(r)
 	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		render400(w, "Unauthorized.")
 		return
 	}
 	postID := r.URL.Query().Get("id")
@@ -621,6 +697,13 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		db.QueryRow(countQuery, args...).Scan(&totalPosts)
 		rowsPosts, _ = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id JOIN post_likes ON posts.id = post_likes.post_id WHERE post_likes.user_id = ? AND post_likes.is_like = 1 GROUP BY posts.id ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, user.ID, pageSize, offset)
 	} else if cat := r.URL.Query().Get("category"); cat != "" {
+		// Проверяем, существует ли категория
+		var catExists int
+		db.QueryRow("SELECT COUNT(*) FROM categories WHERE id = ?", cat).Scan(&catExists)
+		if catExists == 0 {
+			render404(w, r)
+			return
+		}
 		countQuery = "SELECT COUNT(*) FROM post_categories WHERE category_id = ?"
 		args = append(args, cat)
 		db.QueryRow(countQuery, args...).Scan(&totalPosts)
@@ -654,12 +737,22 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		catRows.Close()
 		p.Categories = cats
+		// Количество комментариев
+		db.QueryRow("SELECT COUNT(*) FROM comments WHERE post_id = ?", p.ID).Scan(&p.CommentCount)
 		posts = append(posts, p)
 	}
 	rowsPosts.Close()
 
 	// Параметры для пагинации
 	totalPages := (totalPosts + pageSize - 1) / pageSize
+
+	// Если страница пуста и не первая, редирект на предыдущую страницу
+	if len(posts) == 0 && page > 1 {
+		q := r.URL.Query()
+		q.Set("page", fmt.Sprintf("%d", page-1))
+		http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
+		return
+	}
 
 	data := map[string]interface{}{
 		"User":              user,
@@ -835,50 +928,124 @@ func likePostHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
+	if getCurrentUser(r) != nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 	if r.Method == http.MethodGet {
 		templates.ExecuteTemplate(w, "register.html", nil)
 		return
 	}
 	if r.Method == http.MethodPost {
-		email := r.FormValue("email")
-		username := r.FormValue("username")
+		email := strings.TrimSpace(r.FormValue("email"))
+		username := strings.TrimSpace(r.FormValue("username"))
 		password := r.FormValue("password")
+		// Проверка на пустые поля
 		if email == "" || username == "" || password == "" {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "All fields required"})
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "All fields are required."})
 			return
 		}
+		// Email: длина 5-50, валидный формат
+		if len(email) < 5 || len(email) > 50 || !isValidEmail(email) {
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email must be 5-50 chars and valid format."})
+			return
+		}
+		// Username: длина 3-20, только буквы/цифры, Unicode-aware, без пробелов
+		if !isValidUsername(username) {
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Username: 3-20 letters or digits, no spaces."})
+			return
+		}
+		// Password: длина 6-32
+		if len([]rune(password)) < 6 || len([]rune(password)) > 32 {
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Password: 6-32 characters."})
+			return
+		}
+		// Проверка уникальности email и username (без учёта регистра)
 		var emailExists, usernameExists int
-		db.QueryRow("SELECT COUNT(*) FROM users WHERE email = ?", email).Scan(&emailExists)
-		db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&usernameExists)
+		db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(email) = LOWER(?)", email).Scan(&emailExists)
+		db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(username) = LOWER(?)", username).Scan(&usernameExists)
 		if emailExists > 0 {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email already taken"})
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email already taken."})
 			return
 		}
 		if usernameExists > 0 {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Username already taken"})
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Username already taken."})
 			return
 		}
 		hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		_, err := db.Exec("INSERT INTO users (email, username, password) VALUES (?, ?, ?)", email, username, string(hash))
 		if err != nil {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Registration error"})
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Registration error."})
 			return
 		}
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	}
 }
 
+// --- Вспомогательные функции для валидации ---
+// Email: простая проверка формата
+func isValidEmail(email string) bool {
+	if strings.Count(email, "@") != 1 {
+		return false
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 || len(parts[0]) < 1 || len(parts[1]) < 3 {
+		return false
+	}
+	domain := parts[1]
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") || !strings.Contains(domain, ".") {
+		return false
+	}
+	return true
+}
+
+// Username: 3-20 символов, только буквы/цифры Unicode, без пробелов
+func isValidUsername(username string) bool {
+	r := []rune(username)
+	if len(r) < 3 || len(r) > 20 {
+		return false
+	}
+	for _, ch := range r {
+		if ch == ' ' || ch == '\t' || ch == '\n' {
+			return false
+		}
+		if !(isLetter(ch) || isDigit(ch)) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLetter(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= 0x410 && r <= 0x44F) || (r >= 0xC0 && r <= 0xFF) || (r >= 0x0410 && r <= 0x042F) || (r >= 0x0430 && r <= 0x044F) || (r > 127 && r != ' ')
+}
+
+func isDigit(r rune) bool {
+	return r >= '0' && r <= '9'
+}
 func loginHandler(w http.ResponseWriter, r *http.Request) {
+	if getCurrentUser(r) != nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 	if r.Method == http.MethodGet {
 		templates.ExecuteTemplate(w, "login.html", nil)
 		return
 	}
 	if r.Method == http.MethodPost {
-		email := r.FormValue("email")
+		login := strings.TrimSpace(r.FormValue("login"))
 		password := r.FormValue("password")
 		var id int
 		var username, hash string
-		err := db.QueryRow("SELECT id, username, password FROM users WHERE email = ?", email).Scan(&id, &username, &hash)
+		var err error
+		// Определяем, email это или username
+		if strings.Contains(login, "@") {
+			// Email (без учёта регистра)
+			err = db.QueryRow("SELECT id, username, password FROM users WHERE LOWER(email) = LOWER(?)", login).Scan(&id, &username, &hash)
+		} else {
+			// Username (без учёта регистра)
+			err = db.QueryRow("SELECT id, username, password FROM users WHERE LOWER(username) = LOWER(?)", login).Scan(&id, &username, &hash)
+		}
 		if err != nil {
 			templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Invalid credentials"})
 			return
@@ -903,6 +1070,8 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}
 }
+
+// конец loginHandler
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")

@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{.Post.Title}} - Forum</title>
@@ -8,6 +9,9 @@
     <link href="/static/css/forum.css" rel="stylesheet">
   </head>
   <body>
+    <header class="blog-header py-3 text-center">
+      <a class="blog-header-logo text-dark" href="/">Forum</a>
+    </header>
     <div class="container">
       <header class="blog-header py-3">
         <div class="row flex-nowrap justify-content-between align-items-center">
@@ -39,6 +43,7 @@
                   <a href="/?category={{.ID}}" class="badge bg-secondary text-decoration-none">{{.Name}}</a>
                 {{end}}
               {{end}}
+              | <span class="text-muted">Comments: {{len .Comments}}</span>
             </p>
             <p>{{.Post.Content}}</p>
             <div>
@@ -46,7 +51,10 @@
               <a href="/like_post?id={{.Post.ID}}&like=0" class="btn btn-sm btn-outline-danger">Dislike ({{.Post.Dislikes}})</a>
               {{if and .User (eq .User.Username .Post.Author)}}
                 <a href="/edit_post?id={{.Post.ID}}" class="btn btn-sm btn-outline-primary">Edit</a>
-                <a href="/delete_post?id={{.Post.ID}}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this post?');">Delete</a>
+                <form method="POST" action="/delete_post?id={{.Post.ID}}" style="display:inline" onsubmit="return confirm('Delete this post?');">
+                  <input type="hidden" name="_method" value="DELETE">
+                  <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
               {{end}}
             </div>
           </article>
@@ -62,7 +70,10 @@
                     <a href="/like_comment?id={{.ID}}&like=0&post={{$.Post.ID}}" class="btn btn-sm btn-outline-danger">Dislike ({{.Dislikes}})</a>
                     {{if and $.User (eq $.User.Username .Author)}}
                       <a href="/edit_comment?id={{.ID}}&post={{$.Post.ID}}" class="btn btn-sm btn-outline-primary">Edit</a>
-                      <a href="/delete_comment?id={{.ID}}&post={{$.Post.ID}}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this comment?');">Delete</a>
+                      <form method="POST" action="/delete_comment?id={{.ID}}&post={{$.Post.ID}}" style="display:inline" onsubmit="return confirm('Delete this comment?');">
+                        <input type="hidden" name="_method" value="DELETE">
+                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                      </form>
                     {{end}}
                   </div>
                 </div>

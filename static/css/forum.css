@@ -1,3 +1,15 @@
+/* Ensure nav-scroller links are always clickable and not overlapped */
+.nav-scroller {
+  position: relative;
+  z-index: 2;
+}
+.nav-scroller .nav a {
+  cursor: pointer;
+  z-index: 3;
+}
+html, body {
+  height: 100%;
+}
 .blog-header-logo {
   font-family: "Playfair Display", Georgia, "Times New Roman", serif/*rtl:Amiri, Georgia, "Times New Roman", serif*/;
   font-size: 2.25rem;
@@ -44,8 +56,9 @@ h1, h2, h3, h4, h5, h6 {
   text-align: center;
   background-color: #f9f9f9;
   border-top: .05rem solid #e5e5e5;
-  margin-top: 2rem;
   font-size: 1rem;
+  flex-shrink: 0;
+  align-self: flex-end;
 }
 .blog-footer a {
   color: #0d6efd;
@@ -55,4 +68,15 @@ h1, h2, h3, h4, h5, h6 {
 .blog-footer a:hover {
   color: #0a58ca;
   text-decoration: underline;
+}
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.container {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }

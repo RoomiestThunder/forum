@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Edit Post</title>
@@ -8,9 +9,13 @@
     <link href="/static/css/forum.css" rel="stylesheet">
   </head>
   <body>
+    <header class="blog-header py-3 text-center">
+      <a class="blog-header-logo text-dark" href="/">Forum</a>
+    </header>
     <div class="container">
       <main class="form-signin w-100 m-auto">
         <form method="POST" action="/edit_post?id={{.ID}}">
+          <input type="hidden" name="_method" value="PUT">
           <h1 class="h3 mb-3 fw-normal">Edit Post</h1>
           <div class="form-floating mb-2">
             <input type="text" class="form-control" id="title" name="title" placeholder="Title" value="{{.Title}}" maxlength="100" required>
