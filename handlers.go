@@ -232,7 +232,7 @@ func editPostHandler(w http.ResponseWriter, r *http.Request) {
 			render400(w, "All fields are required.")
 			return
 		}
-		if len(title) > 20 {
+		if len([]rune(title)) > 20 {
 			render400(w, "Title must be 20 characters or less.")
 			return
 		}
@@ -412,8 +412,14 @@ func deleteCommentHandler(w http.ResponseWriter, r *http.Request) {
 		render400(w, "Access denied or comment not found.")
 		return
 	}
-	db.Exec("DELETE FROM comment_likes WHERE comment_id = ?", commentID)
-	db.Exec("DELETE FROM comments WHERE id = ?", commentID)
+	if _, err := db.Exec("DELETE FROM comment_likes WHERE comment_id = ?", commentID); err != nil {
+		render500(w, "Error deleting comment likes.")
+		return
+	}
+	if _, err := db.Exec("DELETE FROM comments WHERE id = ?", commentID); err != nil {
+		render500(w, "Error deleting comment.")
+		return
+	}
 	http.Redirect(w, r, "/post/"+postID, http.StatusSeeOther)
 }
 
@@ -436,14 +442,29 @@ func likeCommentHandler(w http.ResponseWriter, r *http.Request) {
 	if err == sql.ErrNoRows {
 		// Нет лайка/дизлайка — добавить
 		_, err = db.Exec("INSERT INTO comment_likes (comment_id, user_id, is_like) VALUES (?, ?, ?)", commentID, user.ID, isLike)
+		if err != nil {
+			render500(w, "Error adding like/dislike.")
+			return
+		}
 	} else if err == nil {
 		if existingLike == isLike {
 			// Повторное действие — удалить
 			_, err = db.Exec("DELETE FROM comment_likes WHERE comment_id = ? AND user_id = ?", commentID, user.ID)
+			if err != nil {
+				render500(w, "Error removing like/dislike.")
+				return
+			}
 		} else {
 			// Смена лайк/дизлайк
 			_, err = db.Exec("UPDATE comment_likes SET is_like = ? WHERE comment_id = ? AND user_id = ?", isLike, commentID, user.ID)
+			if err != nil {
+				render500(w, "Error updating like/dislike.")
+				return
+			}
 		}
+	} else {
+		render500(w, "Error checking existing like/dislike.")
+		return
 	}
 	http.Redirect(w, r, "/post/"+postID, http.StatusSeeOther)
 }
@@ -497,26 +518,46 @@ func postDetailHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p.CreatedAt = createdAt
 	}
-	db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", p.ID).Scan(&p.Likes)
-	db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", p.ID).Scan(&p.Dislikes)
+	// Лайки/дизлайки
+	if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", p.ID).Scan(&p.Likes); err != nil {
+		p.Likes = 0 // Default value on error
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", p.ID).Scan(&p.Dislikes); err != nil {
+		p.Dislikes = 0 // Default value on error
+	}
 	// Категории поста
-	catRows, _ := db.Query("SELECT categories.id, categories.name FROM categories JOIN post_categories ON categories.id = post_categories.category_id WHERE post_categories.post_id = ?", p.ID)
+	catRows, err := db.Query("SELECT categories.id, categories.name FROM categories JOIN post_categories ON categories.id = post_categories.category_id WHERE post_categories.post_id = ?", p.ID)
+	if err != nil {
+		render500(w, "Error loading post categories.")
+		return
+	}
+	defer catRows.Close()
 	var cats []Category
 	for catRows.Next() {
 		var c Category
-		catRows.Scan(&c.ID, &c.Name)
+		if err := catRows.Scan(&c.ID, &c.Name); err != nil {
+			render500(w, "Error reading post categories.")
+			return
+		}
 		cats = append(cats, c)
 	}
-	catRows.Close()
 	p.Categories = cats
 
 	// Комментарии
 	comments := []Comment{}
-	rows, _ := db.Query(`SELECT comments.id, comments.post_id, comments.user_id, comments.content, comments.created_at, users.username FROM comments JOIN users ON comments.user_id = users.id WHERE comments.post_id = ? ORDER BY comments.created_at ASC`, p.ID)
+	rows, err := db.Query(`SELECT comments.id, comments.post_id, comments.user_id, comments.content, comments.created_at, users.username FROM comments JOIN users ON comments.user_id = users.id WHERE comments.post_id = ? ORDER BY comments.created_at ASC`, p.ID)
+	if err != nil {
+		render500(w, "Error loading comments.")
+		return
+	}
+	defer rows.Close()
 	for rows.Next() {
 		var c Comment
 		var cAt string
-		rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &cAt, &c.Author)
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &cAt, &c.Author); err != nil {
+			render500(w, "Error reading comments.")
+			return
+		}
 		t, err := time.Parse(time.RFC3339, cAt)
 		if err != nil {
 			t, err = time.Parse("2006-01-02 15:04:05", cAt)
@@ -527,11 +568,14 @@ func postDetailHandler(w http.ResponseWriter, r *http.Request) {
 			c.CreatedAt = cAt
 		}
 		// Лайки/дизлайки для комментария
-		db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", c.ID).Scan(&c.Likes)
-		db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", c.ID).Scan(&c.Dislikes)
+		if err := db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", c.ID).Scan(&c.Likes); err != nil {
+			c.Likes = 0 // Default value on error
+		}
+		if err := db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", c.ID).Scan(&c.Dislikes); err != nil {
+			c.Dislikes = 0 // Default value on error
+		}
 		comments = append(comments, c)
 	}
-	rows.Close()
 
 	data := map[string]interface{}{
 		"Post":     p,
@@ -571,10 +615,26 @@ func deletePostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Удаляем пост и связанные данные
-	db.Exec("DELETE FROM post_categories WHERE post_id = ?", postID)
-	db.Exec("DELETE FROM post_likes WHERE post_id = ?", postID)
-	db.Exec("DELETE FROM comments WHERE post_id = ?", postID)
-	db.Exec("DELETE FROM posts WHERE id = ?", postID)
+	if _, err := db.Exec("DELETE FROM post_categories WHERE post_id = ?", postID); err != nil {
+		render500(w, "Error deleting post categories.")
+		return
+	}
+	if _, err := db.Exec("DELETE FROM post_likes WHERE post_id = ?", postID); err != nil {
+		render500(w, "Error deleting post likes.")
+		return
+	}
+	if _, err := db.Exec("DELETE FROM comment_likes WHERE comment_id IN (SELECT id FROM comments WHERE post_id = ?)", postID); err != nil {
+		render500(w, "Error deleting comment likes.")
+		return
+	}
+	if _, err := db.Exec("DELETE FROM comments WHERE post_id = ?", postID); err != nil {
+		render500(w, "Error deleting comments.")
+		return
+	}
+	if _, err := db.Exec("DELETE FROM posts WHERE id = ?", postID); err != nil {
+		render500(w, "Error deleting post.")
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -635,18 +695,24 @@ func initDB() {
 	}
 	// Добавить базовые категории, если их нет
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM categories").Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM categories").Scan(&count); err != nil {
+		log.Fatal("Error checking categories count:", err)
+	}
 	if count == 0 {
-		db.Exec("INSERT INTO categories (name) VALUES (?), (?), (?)", "General", "Programming", "Offtopic")
+		if _, err := db.Exec("INSERT INTO categories (name) VALUES (?), (?), (?)", "General", "Programming", "Offtopic"); err != nil {
+			log.Fatal("Error inserting default categories:", err)
+		}
 	}
 	// Создание таблицы сессий
-	db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id INTEGER,
 		uuid TEXT UNIQUE,
 		expires DATETIME,
 		FOREIGN KEY(user_id) REFERENCES users(id)
-	);`)
+	);`); err != nil {
+		log.Fatal("Error creating sessions table:", err)
+	}
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
@@ -654,13 +720,20 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Получаем категории
 	categories := []Category{}
-	rows, _ := db.Query("SELECT id, name FROM categories")
+	rows, err := db.Query("SELECT id, name FROM categories")
+	if err != nil {
+		render500(w, "Error loading categories.")
+		return
+	}
+	defer rows.Close()
 	for rows.Next() {
 		var c Category
-		rows.Scan(&c.ID, &c.Name)
+		if err := rows.Scan(&c.ID, &c.Name); err != nil {
+			render500(w, "Error reading categories.")
+			return
+		}
 		categories = append(categories, c)
 	}
-	rows.Close()
 
 	// Параметры пагинации
 	const pageSize = 5
@@ -689,33 +762,68 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 	if filter == "myposts" && user != nil {
 		countQuery = "SELECT COUNT(*) FROM posts WHERE user_id = ?"
 		args = append(args, user.ID)
-		db.QueryRow(countQuery, args...).Scan(&totalPosts)
-		rowsPosts, _ = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id WHERE posts.user_id = ? ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, user.ID, pageSize, offset)
+		if err := db.QueryRow(countQuery, args...).Scan(&totalPosts); err != nil {
+			render500(w, "Error counting posts.")
+			return
+		}
+		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id WHERE posts.user_id = ? ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, user.ID, pageSize, offset)
+		if err != nil {
+			render500(w, "Error loading posts.")
+			return
+		}
 	} else if filter == "liked" && user != nil {
 		countQuery = "SELECT COUNT(DISTINCT posts.id) FROM posts JOIN post_likes ON posts.id = post_likes.post_id WHERE post_likes.user_id = ? AND post_likes.is_like = 1"
 		args = append(args, user.ID)
-		db.QueryRow(countQuery, args...).Scan(&totalPosts)
-		rowsPosts, _ = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id JOIN post_likes ON posts.id = post_likes.post_id WHERE post_likes.user_id = ? AND post_likes.is_like = 1 GROUP BY posts.id ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, user.ID, pageSize, offset)
+		if err := db.QueryRow(countQuery, args...).Scan(&totalPosts); err != nil {
+			render500(w, "Error counting liked posts.")
+			return
+		}
+		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id JOIN post_likes ON posts.id = post_likes.post_id WHERE post_likes.user_id = ? AND post_likes.is_like = 1 GROUP BY posts.id ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, user.ID, pageSize, offset)
+		if err != nil {
+			render500(w, "Error loading liked posts.")
+			return
+		}
 	} else if cat := r.URL.Query().Get("category"); cat != "" {
 		// Проверяем, существует ли категория
 		var catExists int
-		db.QueryRow("SELECT COUNT(*) FROM categories WHERE id = ?", cat).Scan(&catExists)
+		if err := db.QueryRow("SELECT COUNT(*) FROM categories WHERE id = ?", cat).Scan(&catExists); err != nil {
+			render500(w, "Error checking category.")
+			return
+		}
 		if catExists == 0 {
 			render404(w, r)
 			return
 		}
 		countQuery = "SELECT COUNT(*) FROM post_categories WHERE category_id = ?"
 		args = append(args, cat)
-		db.QueryRow(countQuery, args...).Scan(&totalPosts)
-		rowsPosts, _ = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id JOIN post_categories ON posts.id = post_categories.post_id WHERE post_categories.category_id = ? ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, cat, pageSize, offset)
+		if err := db.QueryRow(countQuery, args...).Scan(&totalPosts); err != nil {
+			render500(w, "Error counting category posts.")
+			return
+		}
+		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id JOIN post_categories ON posts.id = post_categories.post_id WHERE post_categories.category_id = ? ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, cat, pageSize, offset)
+		if err != nil {
+			render500(w, "Error loading category posts.")
+			return
+		}
 	} else {
 		countQuery = "SELECT COUNT(*) FROM posts"
-		db.QueryRow(countQuery).Scan(&totalPosts)
-		rowsPosts, _ = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, pageSize, offset)
+		if err := db.QueryRow(countQuery).Scan(&totalPosts); err != nil {
+			render500(w, "Error counting all posts.")
+			return
+		}
+		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, pageSize, offset)
+		if err != nil {
+			render500(w, "Error loading all posts.")
+			return
+		}
 	}
+	defer rowsPosts.Close()
 	for rowsPosts.Next() {
 		var p Post
-		rowsPosts.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author)
+		if err := rowsPosts.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author); err != nil {
+			render500(w, "Error reading posts.")
+			return
+		}
 		// Форматируем дату в "02.01.2006 15:04"
 		t, err := time.Parse(time.RFC3339, p.CreatedAt)
 		if err != nil {
@@ -725,23 +833,36 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 			p.CreatedAt = t.Format("02.01.2006 15:04")
 		}
 		// Лайки/дизлайки
-		db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", p.ID).Scan(&p.Likes)
-		db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", p.ID).Scan(&p.Dislikes)
+		if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", p.ID).Scan(&p.Likes); err != nil {
+			p.Likes = 0 // Default value on error
+		}
+		if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", p.ID).Scan(&p.Dislikes); err != nil {
+			p.Dislikes = 0 // Default value on error
+		}
 		// Получаем категории поста
-		catRows, _ := db.Query("SELECT categories.id, categories.name FROM categories JOIN post_categories ON categories.id = post_categories.category_id WHERE post_categories.post_id = ?", p.ID)
+		catRows, err := db.Query("SELECT categories.id, categories.name FROM categories JOIN post_categories ON categories.id = post_categories.category_id WHERE post_categories.post_id = ?", p.ID)
+		if err != nil {
+			render500(w, "Error loading post categories.")
+			return
+		}
 		var cats []Category
 		for catRows.Next() {
 			var c Category
-			catRows.Scan(&c.ID, &c.Name)
+			if err := catRows.Scan(&c.ID, &c.Name); err != nil {
+				catRows.Close()
+				render500(w, "Error reading post categories.")
+				return
+			}
 			cats = append(cats, c)
 		}
 		catRows.Close()
 		p.Categories = cats
 		// Количество комментариев
-		db.QueryRow("SELECT COUNT(*) FROM comments WHERE post_id = ?", p.ID).Scan(&p.CommentCount)
+		if err := db.QueryRow("SELECT COUNT(*) FROM comments WHERE post_id = ?", p.ID).Scan(&p.CommentCount); err != nil {
+			p.CommentCount = 0 // Default value on error
+		}
 		posts = append(posts, p)
 	}
-	rowsPosts.Close()
 
 	// Параметры для пагинации
 	totalPages := (totalPosts + pageSize - 1) / pageSize
@@ -804,13 +925,20 @@ func createPostHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		categories := []Category{}
-		rows, _ := db.Query("SELECT id, name FROM categories")
+		rows, err := db.Query("SELECT id, name FROM categories")
+		if err != nil {
+			render500(w, "Error loading categories.")
+			return
+		}
+		defer rows.Close()
 		for rows.Next() {
 			var c Category
-			rows.Scan(&c.ID, &c.Name)
+			if err := rows.Scan(&c.ID, &c.Name); err != nil {
+				render500(w, "Error reading categories.")
+				return
+			}
 			categories = append(categories, c)
 		}
-		rows.Close()
 		data := map[string]interface{}{"Categories": categories}
 		templates.ExecuteTemplate(w, "create_post.html", data)
 		return
@@ -844,7 +972,7 @@ func createPostHandler(w http.ResponseWriter, r *http.Request) {
 			render400(w, "All fields and at least one category are required.")
 			return
 		}
-		if len(title) > 20 {
+		if len([]rune(title)) > 20 {
 			render400(w, "Title must be 20 characters or less.")
 			return
 		}
@@ -855,7 +983,10 @@ func createPostHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		postID, _ := res.LastInsertId()
 		for _, cid := range catIDs {
-			db.Exec("INSERT INTO post_categories (post_id, category_id) VALUES (?, ?)", postID, cid)
+			if _, err := db.Exec("INSERT INTO post_categories (post_id, category_id) VALUES (?, ?)", postID, cid); err != nil {
+				render500(w, "Error adding post categories.")
+				return
+			}
 		}
 		// После создания поста всегда перенаправляем на главную страницу
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -946,7 +1077,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Email: длина 5-50, валидный формат
-		if len(email) < 5 || len(email) > 50 || !isValidEmail(email) {
+		if len([]rune(email)) < 5 || len([]rune(email)) > 50 || !isValidEmail(email) {
 			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email must be 5-50 chars and valid format."})
 			return
 		}
@@ -962,8 +1093,14 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Проверка уникальности email и username (без учёта регистра)
 		var emailExists, usernameExists int
-		db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(email) = LOWER(?)", email).Scan(&emailExists)
-		db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(username) = LOWER(?)", username).Scan(&usernameExists)
+		if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(email) = LOWER(?)", email).Scan(&emailExists); err != nil {
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Database error checking email."})
+			return
+		}
+		if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(username) = LOWER(?)", username).Scan(&usernameExists); err != nil {
+			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Database error checking username."})
+			return
+		}
 		if emailExists > 0 {
 			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email already taken."})
 			return
@@ -1058,9 +1195,15 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		sid := uuid.New().String()
 		expires := time.Now().Add(24 * time.Hour)
 		// Удаляем старые сессии пользователя
-		db.Exec("DELETE FROM sessions WHERE user_id = ?", id)
+		if _, err := db.Exec("DELETE FROM sessions WHERE user_id = ?", id); err != nil {
+			templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Database error cleaning sessions"})
+			return
+		}
 		// Добавляем новую сессию
-		db.Exec("INSERT INTO sessions (user_id, uuid, expires) VALUES (?, ?, ?)", id, sid, expires)
+		if _, err := db.Exec("INSERT INTO sessions (user_id, uuid, expires) VALUES (?, ?, ?)", id, sid, expires); err != nil {
+			templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Database error creating session"})
+			return
+		}
 		http.SetCookie(w, &http.Cookie{
 			Name:    "session",
 			Value:   sid,
@@ -1076,6 +1219,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err == nil && cookie.Value != "" {
+		// Игнорируем ошибку удаления сессии, так как logout должен всегда работать
 		db.Exec("DELETE FROM sessions WHERE uuid = ?", cookie.Value)
 	}
 	cookie = &http.Cookie{
