@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -48,7 +49,12 @@ func startServer() {
 		w.Write([]byte("403 Forbidden"))
 	})
 	var err error
-	db, err = sql.Open("sqlite3", "forum.db")
+	// Get database path from environment variable, fallback to "forum.db"
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "forum.db"
+	}
+	db, err = sql.Open("sqlite3", dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}

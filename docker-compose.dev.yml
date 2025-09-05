@@ -1,0 +1,21 @@
+services:
+  forum:
+    build:
+      context: .
+      dockerfile: Dockerfile.minimal
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount source code for development (if needed for hot reload)
+      - ./templates:/templates:ro
+      - ./static:/static:ro
+      # Mount data directory for database persistence
+      - forum_data_dev:/data
+    environment:
+      - DB_PATH=/data/forum.db
+      - ENV=development
+    restart: unless-stopped
+
+volumes:
+  forum_data_dev:
+    driver: local

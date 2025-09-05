@@ -1,0 +1,15 @@
+# Ultra minimal Dockerfile using scratch image
+FROM scratch
+
+# Copy the statically-linked binary
+COPY forum /forum
+
+# Copy static files and templates
+COPY templates /templates
+COPY static /static
+
+# Expose the port
+EXPOSE 8080
+
+# Run the application
+CMD ["/forum"]

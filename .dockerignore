@@ -1,0 +1,34 @@
+# Ignore Git metadata
+.git
+.gitignore
+
+# Ignore documentation files  
+README.md
+doc.md
+
+# Ignore environment files
+.env
+.env.*
+
+# Ignore temporary files
+*.tmp
+*.log
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore development files
+.vscode
+.idea
+
+# Docker files (except main Dockerfile)
+docker-compose*.yml
+Dockerfile.*
+
+# Database file (will be mounted as volume)
+*.db
+
+# Build artifacts that we don't need in context
+Makefile
+healthcheck.sh

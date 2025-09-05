@@ -1,0 +1,17 @@
+services:
+  forum:
+    build: 
+      context: .
+      dockerfile: Dockerfile.minimal
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      # Mount data directory for database persistence
+      - forum_data:/data
+    environment:
+      - DB_PATH=/data/forum.db
+    restart: unless-stopped
+
+volumes:
+  forum_data:
+    driver: local
