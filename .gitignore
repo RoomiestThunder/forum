@@ -1,0 +1,65 @@
+# Binaries
+forum
+forum.exe
+forum.dll
+
+# Build output
+dist/
+build/
+*.o
+*.a
+*.so
+
+# Test output
+*.test
+coverage.out
+*.prof
+
+# Dependencies
+vendor/
+go.sum
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+forum.db
+
+# IDE and editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+*.iml
+.goland/
+
+# OS specific
+.DS_Store
+Thumbs.db
+.windows
+.linux
+.macos
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# Logs
+*.log
+logs/
+
+# System files
+.env.prod
+config.local.yml

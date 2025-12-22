@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  forum:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum-app
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      DB_PATH: /app/data/forum.db
+      SESSION_DURATION_HOURS: 24
+      PAGINATION_SIZE: 5
+      DB_MAX_OPEN_CONN: 25
+      DB_MAX_IDLE_CONN: 5
+      READ_TIMEOUT_SECS: 15
+      WRITE_TIMEOUT_SECS: 15
+      IDLE_TIMEOUT_SECS: 60
+      COOKIE_HTTPONLY: "true"
+      COOKIE_SECURE: "false"
+      COOKIE_SAMESITE: "Lax"
+    volumes:
+      - forum-data:/app/data
+      - ./templates:/app/templates
+      - ./static:/app/static
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - forum-network
+    depends_on:
+      - forum-db
+
+  forum-db:
+    image: alpine:latest
+    container_name: forum-db
+    volumes:
+      - forum-data:/app/data
+    networks:
+      - forum-network
+    command: sleep 3600
+
+volumes:
+  forum-data:
+    driver: local
+
+networks:
+  forum-network:
+    driver: bridge
