@@ -10,6 +10,7 @@ import (
 
 	"forum/internal/database"
 	"forum/internal/models"
+	tmplfs "forum/templates"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -32,8 +33,8 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return 1
 	},
-	"inc":          func(a int) int { return a + 1 },
-	"formatTime":   func(t time.Time) string { return t.Format("02.01.2006 15:04") },
+	"inc":        func(a int) int { return a + 1 },
+	"formatTime": func(t time.Time) string { return t.Format("02.01.2006 15:04") },
 	"paginationURL": func(page int, category, filter string) string {
 		params := ""
 		if category != "" {
@@ -55,7 +56,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return "/?" + params
 	},
-}).ParseGlob("templates/*.html"))
+}).ParseFS(tmplfs.FS, "*.html"))
 
 // RegisterRoutes mounts all HTML routes onto mux.
 func RegisterRoutes(mux *http.ServeMux, st database.Store) {
