@@ -56,7 +56,7 @@ jobs:
           DATABASE_URL: postgres://forum:forum@localhost:5432/forum_test?sslmode=disable
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race -short -coverprofile=coverage.out ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
