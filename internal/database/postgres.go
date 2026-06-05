@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,6 +13,9 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+//go:embed schema_postgres.sql
+var postgresSchema string
 
 type PostgresStore struct {
 	db     *sql.DB
@@ -34,6 +38,13 @@ func InitPostgres(dsn string) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	return db, nil
+}
+
+// RunPostgresSchema applies the embedded schema to a freshly created database.
+// Used in tests and for first-run initialization without a migration tool.
+func RunPostgresSchema(db *sql.DB) error {
+	_, err := db.Exec(postgresSchema)
+	return err
 }
 
 // ---- User operations ----

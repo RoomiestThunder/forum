@@ -72,6 +72,9 @@ func TestIntegration_RegisterLoginPosts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("postgres init: %v", err)
 	}
+	if err := database.RunPostgresSchema(db); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
 
 	store := database.NewPostgresStore(db, nil)
 	defer func() { _ = store.Close() }()
