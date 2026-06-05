@@ -1,5 +1,7 @@
 # Forum Application
 
+[![CI](https://github.com/RoomiestThunder/forum/actions/workflows/ci.yml/badge.svg)](https://github.com/RoomiestThunder/forum/actions/workflows/ci.yml)
+
 Production-ready web forum built in Go with JWT authentication, REST API, real-time WebSocket notifications, Redis caching, MinIO file storage, and Prometheus observability.
 
 ## Tech Stack
