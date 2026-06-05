@@ -63,3 +63,6 @@ logs/
 # System files
 .env.prod
 config.local.yml
+
+# Claude Code
+.claude/
