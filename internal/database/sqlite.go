@@ -439,8 +439,8 @@ func (s *SQLiteStore) GetCommentsByPostID(postID int) ([]*models.Comment, error)
 	for rows.Next() {
 		var c models.Comment
 		_ = rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
-		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", c.ID).Scan(&c.Likes)
-		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", c.ID).Scan(&c.Dislikes)
+		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", c.ID).Scan(&c.Likes)
+		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", c.ID).Scan(&c.Dislikes)
 		comments = append(comments, &c)
 	}
 	return comments, nil
