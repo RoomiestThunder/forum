@@ -1,7 +1,7 @@
-# Binaries
-forum
-forum.exe
-forum.dll
+# Binaries (root-level compiled output only)
+/forum
+/forum.exe
+/forum.dll
 
 # Build output
 dist/
