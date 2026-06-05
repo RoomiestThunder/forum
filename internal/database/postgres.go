@@ -349,8 +349,8 @@ func (s *PostgresStore) GetCommentsByPostID(postID int) ([]*models.Comment, erro
 	for rows.Next() {
 		var c models.Comment
 		_ = rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
-		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = TRUE", c.ID).Scan(&c.Likes)
-		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = FALSE", c.ID).Scan(&c.Dislikes)
+		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = TRUE", c.ID).Scan(&c.Likes)
+		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = FALSE", c.ID).Scan(&c.Dislikes)
 		comments = append(comments, &c)
 	}
 	return comments, nil
@@ -492,8 +492,8 @@ func (s *PostgresStore) ToggleCommentLike(commentID, userID int, isLike bool) er
 
 func (s *PostgresStore) GetPostLikesCount(postID int) (int, int, error) {
 	var likes, dislikes int
-	s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = $1 AND is_like = TRUE", postID).Scan(&likes)
-	s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = $1 AND is_like = FALSE", postID).Scan(&dislikes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = $1 AND is_like = TRUE", postID).Scan(&likes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = $1 AND is_like = FALSE", postID).Scan(&dislikes)
 	return likes, dislikes, nil
 }
 

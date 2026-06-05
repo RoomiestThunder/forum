@@ -74,7 +74,7 @@ func TestIntegration_RegisterLoginPosts(t *testing.T) {
 	}
 
 	store := database.NewPostgresStore(db, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	srv := setupServer(t, store)
 	defer srv.Close()
@@ -92,7 +92,7 @@ func TestIntegration_RegisterLoginPosts(t *testing.T) {
 		t.Fatalf("register: want 201, got %d", resp.StatusCode)
 	}
 	var regResp map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&regResp)
+	_ = json.NewDecoder(resp.Body).Decode(&regResp)
 	accessToken, _ := regResp["access_token"].(string)
 	if accessToken == "" {
 		t.Fatal("no access token in register response")
@@ -118,7 +118,7 @@ func TestIntegration_RegisterLoginPosts(t *testing.T) {
 		t.Fatalf("categories: want 200, got %d", resp.StatusCode)
 	}
 	var cats []map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&cats)
+	_ = json.NewDecoder(resp.Body).Decode(&cats)
 	if len(cats) == 0 {
 		t.Fatal("expected at least one category")
 	}
@@ -139,7 +139,7 @@ func TestIntegration_RegisterLoginPosts(t *testing.T) {
 		t.Fatalf("create post: want 201, got %d", resp.StatusCode)
 	}
 	var postResp map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&postResp)
+	_ = json.NewDecoder(resp.Body).Decode(&postResp)
 	postID := int(postResp["id"].(float64))
 	t.Logf("created post id=%d", postID)
 
@@ -190,7 +190,7 @@ func TestIntegration_SQLite_CRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := database.NewSQLiteStoreWithoutLogger(db)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	srv := setupServer(t, store)
 	defer srv.Close()
@@ -209,13 +209,13 @@ func TestIntegration_SQLite_CRUD(t *testing.T) {
 	}
 
 	var regResp map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&regResp)
+	_ = json.NewDecoder(resp.Body).Decode(&regResp)
 	token, _ := regResp["access_token"].(string)
 
 	// Categories
 	resp, _ = http.Get(base + "/api/v1/categories")
 	var cats []map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&cats)
+	_ = json.NewDecoder(resp.Body).Decode(&cats)
 	catID := int(cats[0]["id"].(float64))
 
 	// Create post

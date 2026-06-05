@@ -459,7 +459,7 @@ func (s *SQLiteStore) UpdateComment(id, userID int, content string) error {
 }
 
 func (s *SQLiteStore) DeleteComment(id, userID int) error {
-	s.db.Exec("DELETE FROM comment_likes WHERE comment_id = ?", id)
+	_, _ = s.db.Exec("DELETE FROM comment_likes WHERE comment_id = ?", id)
 	res, err := s.db.Exec("DELETE FROM comments WHERE id = ? AND user_id = ?", id, userID)
 	if err != nil {
 		return apperrors.DatabaseError(err)
