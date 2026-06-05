@@ -55,7 +55,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return "/?" + params
 	},
-}).ParseGlob("../../templates/*.html"))
+}).ParseGlob("templates/*.html"))
 
 // RegisterRoutes mounts all HTML routes onto mux.
 func RegisterRoutes(mux *http.ServeMux, st database.Store) {

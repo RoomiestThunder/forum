@@ -17,7 +17,6 @@ coverage.out
 
 # Dependencies
 vendor/
-go.sum
 
 # Environment variables
 .env
