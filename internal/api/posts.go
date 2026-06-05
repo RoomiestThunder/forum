@@ -51,7 +51,7 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 		posts, err = p, e
 		// Cache the result
 		if e == nil && cacheKey != "" && s.cache != nil {
-			s.cache.SetPosts(context.Background(), cacheKey, p)
+			_ = s.cache.SetPosts(context.Background(), cacheKey, p)
 		}
 	}
 
@@ -107,7 +107,7 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 
 	// Invalidate posts cache
 	if s.cache != nil {
-		s.cache.InvalidatePosts(r.Context())
+		_ = s.cache.InvalidatePosts(r.Context())
 	}
 
 	jsonResponse(w, map[string]int{"id": postID}, http.StatusCreated)
@@ -137,7 +137,7 @@ func (s *Server) updatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cache != nil {
-		s.cache.InvalidatePosts(r.Context())
+		_ = s.cache.InvalidatePosts(r.Context())
 	}
 	jsonResponse(w, map[string]string{"status": "updated"}, http.StatusOK)
 }
@@ -158,7 +158,7 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cache != nil {
-		s.cache.InvalidatePosts(r.Context())
+		_ = s.cache.InvalidatePosts(r.Context())
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -217,7 +217,7 @@ func (s *Server) likePost(w http.ResponseWriter, r *http.Request) {
 	}
 	// Invalidate cache since like counts changed
 	if s.cache != nil {
-		s.cache.InvalidatePosts(r.Context())
+		_ = s.cache.InvalidatePosts(r.Context())
 	}
 	// Notify post author
 	if s.hub != nil {

@@ -316,7 +316,7 @@ func (s *SQLiteStore) loadCategories(p *models.Post) {
 	defer rows.Close()
 	for rows.Next() {
 		var c models.Category
-		rows.Scan(&c.ID, &c.Name)
+		_ = rows.Scan(&c.ID, &c.Name)
 		p.Categories = append(p.Categories, c)
 	}
 }
@@ -409,7 +409,7 @@ func (s *SQLiteStore) GetCategories() ([]*models.Category, error) {
 	var cats []*models.Category
 	for rows.Next() {
 		var c models.Category
-		rows.Scan(&c.ID, &c.Name)
+		_ = rows.Scan(&c.ID, &c.Name)
 		cats = append(cats, &c)
 	}
 	return cats, nil
@@ -438,7 +438,7 @@ func (s *SQLiteStore) GetCommentsByPostID(postID int) ([]*models.Comment, error)
 	var comments []*models.Comment
 	for rows.Next() {
 		var c models.Comment
-		rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
+		_ = rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
 		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", c.ID).Scan(&c.Likes)
 		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", c.ID).Scan(&c.Dislikes)
 		comments = append(comments, &c)
@@ -489,7 +489,7 @@ func (s *SQLiteStore) GetSessionUserID(uuid string) (int, error) {
 		return 0, apperrors.DatabaseError(err)
 	}
 	if time.Now().After(expires) {
-		s.DeleteSession(uuid)
+		_ = s.DeleteSession(uuid)
 		return 0, apperrors.NotFoundError("Session (expired)")
 	}
 	return userID, nil
@@ -609,7 +609,7 @@ func (s *SQLiteStore) GetUploadsByUser(userID int) ([]*models.Upload, error) {
 	var uploads []*models.Upload
 	for rows.Next() {
 		var u models.Upload
-		rows.Scan(&u.ID, &u.UserID, &u.Filename, &u.ObjectKey, &u.ContentType, &u.Size, &u.URL, &u.CreatedAt)
+		_ = rows.Scan(&u.ID, &u.UserID, &u.Filename, &u.ObjectKey, &u.ContentType, &u.Size, &u.URL, &u.CreatedAt)
 		uploads = append(uploads, &u)
 	}
 	return uploads, nil

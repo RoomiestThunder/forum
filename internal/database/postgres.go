@@ -235,7 +235,7 @@ func (s *PostgresStore) loadCategories(p *models.Post) {
 	defer rows.Close()
 	for rows.Next() {
 		var c models.Category
-		rows.Scan(&c.ID, &c.Name)
+		_ = rows.Scan(&c.ID, &c.Name)
 		p.Categories = append(p.Categories, c)
 	}
 }
@@ -316,7 +316,7 @@ func (s *PostgresStore) GetCategories() ([]*models.Category, error) {
 	var cats []*models.Category
 	for rows.Next() {
 		var c models.Category
-		rows.Scan(&c.ID, &c.Name)
+		_ = rows.Scan(&c.ID, &c.Name)
 		cats = append(cats, &c)
 	}
 	return cats, nil
@@ -348,7 +348,7 @@ func (s *PostgresStore) GetCommentsByPostID(postID int) ([]*models.Comment, erro
 	var comments []*models.Comment
 	for rows.Next() {
 		var c models.Comment
-		rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
+		_ = rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
 		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = TRUE", c.ID).Scan(&c.Likes)
 		s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = FALSE", c.ID).Scan(&c.Dislikes)
 		comments = append(comments, &c)
@@ -369,7 +369,7 @@ func (s *PostgresStore) UpdateComment(id, userID int, content string) error {
 }
 
 func (s *PostgresStore) DeleteComment(id, userID int) error {
-	s.db.Exec("DELETE FROM comment_likes WHERE comment_id = $1", id)
+	_, _ = s.db.Exec("DELETE FROM comment_likes WHERE comment_id = $1", id)
 	res, err := s.db.Exec("DELETE FROM comments WHERE id = $1 AND user_id = $2", id, userID)
 	if err != nil {
 		return apperrors.DatabaseError(err)
@@ -402,7 +402,7 @@ func (s *PostgresStore) GetSessionUserID(uuid string) (int, error) {
 		return 0, apperrors.DatabaseError(err)
 	}
 	if time.Now().After(expires) {
-		s.DeleteSession(uuid)
+		_ = s.DeleteSession(uuid)
 		return 0, apperrors.NotFoundError("Session (expired)")
 	}
 	return userID, nil
@@ -527,7 +527,7 @@ func (s *PostgresStore) GetUploadsByUser(userID int) ([]*models.Upload, error) {
 	var uploads []*models.Upload
 	for rows.Next() {
 		var u models.Upload
-		rows.Scan(&u.ID, &u.UserID, &u.Filename, &u.ObjectKey, &u.ContentType, &u.Size, &u.URL, &u.CreatedAt)
+		_ = rows.Scan(&u.ID, &u.UserID, &u.Filename, &u.ObjectKey, &u.ContentType, &u.Size, &u.URL, &u.CreatedAt)
 		uploads = append(uploads, &u)
 	}
 	return uploads, nil

@@ -38,7 +38,7 @@ func TestValidateConfigValid(t *testing.T) {
 
 func TestValidateConfigInvalidPort(t *testing.T) {
 	os.Clearenv()
-	os.Setenv("PORT", "99999")
+	_ = os.Setenv("PORT", "99999")
 
 	cfg := LoadConfig()
 	err := cfg.Validate()
@@ -50,7 +50,7 @@ func TestValidateConfigInvalidPort(t *testing.T) {
 
 func TestValidateConfigZeroPort(t *testing.T) {
 	os.Clearenv()
-	os.Setenv("PORT", "0")
+	_ = os.Setenv("PORT", "0")
 
 	cfg := LoadConfig()
 	err := cfg.Validate()
@@ -62,7 +62,7 @@ func TestValidateConfigZeroPort(t *testing.T) {
 
 func TestValidateConfigInvalidMaxConnections(t *testing.T) {
 	os.Clearenv()
-	os.Setenv("DB_MAX_OPEN_CONN", "0")
+	_ = os.Setenv("DB_MAX_OPEN_CONN", "0")
 
 	cfg := LoadConfig()
 	err := cfg.Validate()
@@ -74,7 +74,7 @@ func TestValidateConfigInvalidMaxConnections(t *testing.T) {
 
 func TestValidateConfigInvalidPaginationSize(t *testing.T) {
 	os.Clearenv()
-	os.Setenv("PAGINATION_SIZE", "0")
+	_ = os.Setenv("PAGINATION_SIZE", "0")
 
 	cfg := LoadConfig()
 	err := cfg.Validate()
@@ -87,7 +87,7 @@ func TestValidateConfigInvalidPaginationSize(t *testing.T) {
 func TestGetEnvWithDefault(t *testing.T) {
 	os.Clearenv()
 
-	os.Setenv("TEST_VAR", "test_value")
+	_ = os.Setenv("TEST_VAR", "test_value")
 	result := getEnv("TEST_VAR", "default")
 	if result != "test_value" {
 		t.Errorf("Expected 'test_value', got '%s'", result)
@@ -102,7 +102,7 @@ func TestGetEnvWithDefault(t *testing.T) {
 func TestGetEnvIntWithDefault(t *testing.T) {
 	os.Clearenv()
 
-	os.Setenv("TEST_INT", "42")
+	_ = os.Setenv("TEST_INT", "42")
 	result := getEnvInt("TEST_INT", 0)
 	if result != 42 {
 		t.Errorf("Expected 42, got %d", result)

@@ -77,11 +77,11 @@ func RegisterRoutes(mux *http.ServeMux, st database.Store) {
 			return
 		}
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("403 Forbidden"))
+		_, _ = w.Write([]byte("403 Forbidden"))
 	})
 	mux.HandleFunc("/templates/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("403 Forbidden"))
+		_, _ = w.Write([]byte("403 Forbidden"))
 	})
 
 	mux.HandleFunc("/post/", methodGate([]string{http.MethodGet, http.MethodPost}, postDetailHandler))
@@ -277,7 +277,7 @@ func postDetailHandler(w http.ResponseWriter, r *http.Request) {
 			templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Comment too long (max 500)."})
 			return
 		}
-		store.CreateComment(id, user.ID, content)
+		_, _ = store.CreateComment(id, user.ID, content)
 		http.Redirect(w, r, r.URL.Path, http.StatusSeeOther)
 		return
 	}
@@ -302,10 +302,6 @@ func postDetailHandler(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "post_detail.html", data)
 }
 
-// formatCreatedAt formats a time.Time for display in templates.
-func formatCreatedAt(t time.Time) string {
-	return t.Format("02.01.2006 15:04")
-}
 
 func editPostHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
@@ -474,7 +470,7 @@ func likeCommentHandler(w http.ResponseWriter, r *http.Request) {
 	var commentID int
 	fmt.Sscanf(commentIDStr, "%d", &commentID)
 	isLike := r.URL.Query().Get("like") == "1"
-	store.ToggleCommentLike(commentID, user.ID, isLike)
+	_ = store.ToggleCommentLike(commentID, user.ID, isLike)
 	http.Redirect(w, r, "/post/"+postIDStr, http.StatusSeeOther)
 }
 
@@ -488,7 +484,7 @@ func likePostHandler(w http.ResponseWriter, r *http.Request) {
 	var postID int
 	fmt.Sscanf(postIDStr, "%d", &postID)
 	isLike := r.URL.Query().Get("like") == "1"
-	store.TogglePostLike(postID, user.ID, isLike)
+	_ = store.TogglePostLike(postID, user.ID, isLike)
 
 	// Only redirect to same-origin paths to prevent open redirect.
 	if ref := r.Header.Get("Referer"); ref != "" {
@@ -621,7 +617,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sid := uuid.New().String()
-	store.DeleteSessionsByUser(userID)
+	_ = store.DeleteSessionsByUser(userID)
 	if err := store.CreateSession(userID, sid); err != nil {
 		templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Session error"})
 		return
@@ -639,7 +635,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err == nil && cookie.Value != "" {
-		store.DeleteSession(cookie.Value)
+		_ = store.DeleteSession(cookie.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
