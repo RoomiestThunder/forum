@@ -1,213 +1,217 @@
 # Forum Application
 
-Web forum built in Go with user authentication, posts, comments, and likes/dislikes system.
-
-## Quick Start
-
-### Docker (Recommended)
-```bash
-docker-compose up --build
-```
-Visit: http://localhost:8080
-
-### Local Development
-```bash
-go mod download
-CGO_ENABLED=1 go build -o forum
-./forum
-```
-
-## Features
-
-- User registration and authentication (email/username login)
-- Create, edit, delete posts with categories
-- Comment system with full CRUD
-- Like/dislike voting for posts and comments
-- Category-based filtering
-- Pagination
-- User session management (24-hour tokens)
-- Password hashing with bcrypt
-- SQLite database
+Production-ready web forum built in Go with JWT authentication, REST API, real-time WebSocket notifications, Redis caching, MinIO file storage, and Prometheus observability.
 
 ## Tech Stack
 
-- **Backend:** Go 1.24.2 (net/http, html/template, database/sql)
-- **Database:** SQLite3
-- **Frontend:** Bootstrap 5, Server-side rendering
-- **Security:** Bcrypt password hashing, UUID sessions
-- **Dependencies:**
-  - github.com/mattn/go-sqlite3
-  - golang.org/x/crypto/bcrypt
-  - github.com/google/uuid
+| Layer | Technology |
+|---|---|
+| Language | Go 1.24 |
+| Database | PostgreSQL 16 (prod) / SQLite (dev) |
+| Cache + Rate limiting | Redis 7 |
+| File storage | MinIO (S3-compatible) |
+| Auth | JWT (access 15 min + refresh 7 days) + session cookies (HTML) |
+| Real-time | WebSocket (gorilla/websocket) |
+| Metrics | Prometheus + Grafana |
+| CI/CD | GitHub Actions → GHCR |
 
-## Configuration
+## Quick Start
 
-Environment variables (see `.env.example`):
-- `PORT` - Server port (default: 8080)
-- `DB_PATH` - Database file path (default: forum.db)
-- `SESSION_DURATION_HOURS` - Session timeout (default: 24)
-- `PAGINATION_SIZE` - Posts per page (default: 5)
+### Full stack with Docker Compose
 
-## API Endpoints
-
-### Authentication
-- `GET/POST /register` - User registration
-- `GET/POST /login` - User login
-- `GET /logout` - User logout
-
-### Posts
-- `GET /` - Forum homepage with pagination
-- `GET /create_post` - Create post form
-- `POST /create_post` - Create post
-- `GET /post/{id}` - View post with comments
-- `GET/PUT /edit_post?id={id}` - Edit post
-- `DELETE /delete_post?id={id}` - Delete post
-- `GET /like_post?id={id}&like=1/0` - Like/dislike post
-
-### Comments
-- `POST /post/{id}` - Add comment
-- `GET/PUT /edit_comment?id={id}&post={post_id}` - Edit comment
-- `DELETE /delete_comment?id={id}&post={post_id}` - Delete comment
-- `GET /like_comment?id={id}&post={post_id}&like=1/0` - Like/dislike comment
-
-### Filtering
-- `GET /?category={id}` - Filter by category
-- `GET /?filter=myposts` - User's posts
-- `GET /?filter=liked` - User's liked posts
-- `GET /?page={num}` - Pagination
-
-## Database Schema
-
-- **users** - User accounts (email, username, bcrypt password)
-- **posts** - Forum posts (title, content, user_id, created_at)
-- **comments** - Post comments (content, post_id, user_id, created_at)
-- **categories** - Post categories
-- **post_categories** - Many-to-many relationship
-- **post_likes** - Post votes (user_id, post_id, is_like)
-- **comment_likes** - Comment votes (user_id, comment_id, is_like)
-- **sessions** - User sessions (uuid, user_id, expires)
-
-## Security
-
-- Bcrypt password hashing (cost: 12)
-- UUID-based sessions with 24-hour expiration
-- Single active session per user
-- SQL injection prevention via prepared statements
-- XSS protection via template auto-escaping
-- HTTP method enforcement
-- Owner-only access to edit/delete operations
-- Input validation on all endpoints
-
-## Files
-
-```
-forum/
-├── cmd/
-│   └── forum/
-│       └── main.go                 # Application entry point (30 lines)
-├── internal/
-│   ├── config/
-│   │   ├── config.go               # Configuration management (151 lines)
-│   │   └── config_test.go          # Config tests (13 tests)
-│   ├── database/
-│   │   └── database.go             # Store interface & SQLite impl (539 lines)
-│   ├── errors/
-│   │   ├── errors.go               # Custom error types (106 lines)
-│   │   └── errors_test.go          # Error tests (14 tests)
-│   ├── handlers/
-│   │   ├── handlers.go             # HTTP handlers (1190 lines)
-│   │   └── types.go                # Domain types (43 lines)
-│   └── middleware/
-│       ├── middleware.go           # Middleware chain (265 lines)
-│       └── middleware_test.go      # Middleware tests (5 tests)
-├── templates/                      # HTML templates (9 files)
-├── static/                         # CSS and favicon
-├── go.mod/go.sum                   # Go dependencies
-├── Dockerfile                      # Multi-stage Docker build
-├── docker-compose.yml              # Docker orchestration
-├── .env.example                    # Environment template
-├── .gitignore                      # Git ignore rules
-├── LICENSE                         # MIT License
-└── README.md                       # This file
-```
-
-## Project Structure
-
-**cmd/** - Application entry points
-- `forum/main.go` - Server startup and configuration loading
-
-**internal/** - Private packages (not importable from outside)
-- `config/` - Configuration management and validation
-- `database/` - Data persistence layer with Store interface
-- `errors/` - Custom error types with HTTP status mapping
-- `handlers/` - HTTP request handlers and business logic
-- `middleware/` - Request processing middleware chain
-
-**templates/** - Server-side rendered HTML templates
-**static/** - CSS stylesheets and favicon
-
-## Building & Running
-
-### With Docker Compose (Recommended)
 ```bash
 docker-compose up --build
+```
+
+| Service | URL |
+|---|---|
+| Forum | http://localhost:8080 |
+| API | http://localhost:8080/api/v1 |
+| Grafana | http://localhost:3000 (admin/admin) |
+| Prometheus | http://localhost:9090 |
+| MinIO console | http://localhost:9001 (minioadmin/minioadmin) |
+
+### Local development (SQLite, no external services)
+
+```bash
+go mod download
+CGO_ENABLED=1 go build -o forum ./cmd/forum
+./forum
 # Visit http://localhost:8080
 ```
 
-### Manual Build & Run
-```bash
-# Download dependencies
-go mod download
+## REST API
 
-# Build binary (requires CGO for SQLite)
-CGO_ENABLED=1 go build -o forum ./cmd/forum
+All endpoints return JSON. Authenticated endpoints require `Authorization: Bearer <access_token>`.
 
-# Run server
-./forum
-```
+### Auth
 
-### Run Tests
-```bash
-# Run all tests
-go test ./...
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/v1/auth/register` | — | Register, returns token pair |
+| POST | `/api/v1/auth/login` | — | Login, returns token pair |
+| POST | `/api/v1/auth/refresh` | — | Rotate refresh token |
+| POST | `/api/v1/auth/logout` | ✓ | Revoke refresh tokens |
 
-# Run with verbose output
-go test -v ./...
+### Posts
 
-# Run specific package tests
-go test -v ./internal/config
-go test -v ./internal/errors
-go test -v ./internal/middleware
-```
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/posts` | — | List posts (paginated) |
+| POST | `/api/v1/posts` | ✓ | Create post |
+| GET | `/api/v1/posts/{id}` | — | Get post + comments |
+| PUT | `/api/v1/posts/{id}` | ✓ | Update post (owner only) |
+| DELETE | `/api/v1/posts/{id}` | ✓ | Delete post (owner only) |
+| POST | `/api/v1/posts/{id}` | ✓ | Add comment |
 
-### Code Quality
-```bash
-# Format code
-go fmt ./...
+### Other
 
-# Analyze code
-go vet ./...
-```
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/search?q=...` | — | Full-text search (PostgreSQL tsvector / SQLite LIKE) |
+| GET | `/api/v1/categories` | — | List categories |
+| POST | `/api/v1/like/post` | ✓ | Toggle post like/dislike |
+| POST | `/api/v1/like/comment` | ✓ | Toggle comment like/dislike |
+| POST | `/api/v1/upload` | ✓ | Upload file (multipart, max 5 MB) |
+| GET | `/api/v1/ws?token=...` | ✓ | WebSocket notifications |
+| GET | `/api/v1/health` | — | Health check |
+| GET | `/metrics` | — | Prometheus metrics |
 
-## Environment Configuration
+### Query parameters for `GET /api/v1/posts`
 
-Create `.env` file from template:
+| Parameter | Values | Description |
+|---|---|---|
+| `page` | integer | Pagination |
+| `filter` | `myposts`, `liked` | Filter by ownership / liked |
+| `category` | category id | Filter by category |
+
+## HTML Frontend
+
+The classic server-rendered UI remains fully functional alongside the REST API.
+
+- `GET/POST /register` — registration
+- `GET/POST /login` — login
+- `GET /logout` — logout
+- `GET /` — homepage with filtering and pagination
+- `GET /post/{id}` — post detail with comments
+- `GET/PUT /edit_post?id={id}` — edit post
+- `DELETE /delete_post?id={id}` — delete post
+- `GET /like_post?id={id}&like=1/0` — like/dislike post
+- `POST /post/{id}` — add comment
+- `GET/PUT /edit_comment?id={id}&post={post_id}` — edit comment
+- `DELETE /delete_comment?id={id}&post={post_id}` — delete comment
+
+## Configuration
+
+Copy `.env.example` to `.env` and adjust as needed.
+
 ```bash
 cp .env.example .env
 ```
 
-Configuration options:
-- `PORT` - Server port (default: 8080)
-- `DB_PATH` - SQLite database path (default: forum.db)
-- `DB_MAX_OPEN_CONN` - Connection pool size (default: 25)
-- `SESSION_DURATION_HOURS` - Session timeout (default: 24)
-- `PAGINATION_SIZE` - Posts per page (default: 5)
-- `READ_TIMEOUT_SECS` - HTTP read timeout (default: 15s)
-- `WRITE_TIMEOUT_SECS` - HTTP write timeout (default: 15s)
+Key variables:
+
+```bash
+# Server
+PORT=8080
+
+# Database — set DATABASE_URL for PostgreSQL, otherwise SQLite is used
+DATABASE_URL=postgres://forum:forum@localhost:5432/forum?sslmode=disable
+DB_PATH=forum.db
+
+# JWT
+JWT_SECRET=change-me-in-production
+JWT_ACCESS_DURATION_MIN=15
+JWT_REFRESH_DURATION_DAYS=7
+
+# Redis
+REDIS_URL=redis://localhost:6379
+
+# MinIO / S3
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=forum
+```
+
+Redis and MinIO are optional — the app starts without them (uploads and cache disabled).
+
+## Database
+
+### PostgreSQL (production)
+
+Schema is applied automatically via `migrations/001_initial.up.sql` when the container starts.
+Full-text search uses `tsvector GENERATED ALWAYS` with a GIN index.
+
+### SQLite (development)
+
+Schema is applied automatically on first run. Full-text search falls back to `LIKE`.
+
+## Project Structure
+
+```
+forum/
+├── cmd/forum/main.go           # Wires all components, starts server
+├── internal/
+│   ├── models/                 # Shared domain types
+│   ├── config/                 # Config from environment variables
+│   ├── database/               # Store interface + SQLite + PostgreSQL
+│   ├── auth/                   # JWT token manager
+│   ├── api/                    # REST API v1 handlers
+│   ├── handlers/               # HTML template handlers
+│   ├── websocket/              # WebSocket hub (per-user broadcast)
+│   ├── cache/                  # Redis cache-aside + rate limiting
+│   ├── storage/                # MinIO/S3 file upload
+│   ├── metrics/                # Prometheus metrics
+│   ├── middleware/             # Logging, recovery, rate limiting
+│   ├── errors/                 # Typed application errors
+│   └── tests/                  # Integration tests
+├── migrations/                 # SQL migration files
+├── monitoring/                 # Prometheus + Grafana config
+├── templates/                  # HTML templates
+├── static/                     # CSS and favicon
+├── Dockerfile
+├── docker-compose.yml
+└── .env.example
+```
+
+## Testing
+
+```bash
+# All tests (SQLite integration tests run without external services)
+go test -short ./...
+
+# With race detector
+go test -short -race ./...
+
+# Full integration tests (requires Docker for testcontainers)
+go test ./internal/tests/...
+```
+
+## CI/CD
+
+GitHub Actions pipeline on every push to `main` / `develop`:
+
+1. `golangci-lint`
+2. `go test -race ./...` (with PostgreSQL + Redis service containers)
+3. `go build`
+4. Docker build + push to GHCR (main branch only)
+
+## Security
+
+- JWT Bearer tokens for REST API (access + refresh with rotation)
+- Session cookies for HTML frontend (single active session per user)
+- Bcrypt password hashing
+- Same-origin Referer validation (no open redirect)
+- Magic-byte file type validation on uploads
+- Server-side file size enforcement (not trusting client headers)
+- SQL injection prevention via prepared statements / parameterized queries
+- DeletePost wrapped in a transaction (no orphaned rows)
+- Input validation on all endpoints
 
 ## License
 
-MIT License - See LICENSE file
+MIT License — see [LICENSE](LICENSE)
 
 ## Author
 
