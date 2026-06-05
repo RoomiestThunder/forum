@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"forum/internal/errors"
@@ -150,6 +151,7 @@ func handleError(w http.ResponseWriter, err error) {
 
 // RateLimiter implements token bucket rate limiting.
 type RateLimiter struct {
+	mu      sync.Mutex
 	buckets map[string]*tokenBucket
 	limit   int           // tokens per second
 	burst   int           // maximum burst
@@ -174,6 +176,8 @@ func NewRateLimiter(requestsPerSecond, burst int) *RateLimiter {
 
 // Allow checks if a request from the given key (IP) is allowed.
 func (rl *RateLimiter) Allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
 	now := time.Now()
 	bucket, exists := rl.buckets[key]
 

@@ -1,26 +1,67 @@
 package handlers
 
 import (
-	"database/sql"
 	"fmt"
 	"html/template"
-	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
-	"golang.org/x/crypto/bcrypt"
+	"forum/internal/database"
+	"forum/internal/models"
 
-	"forum/internal/config"
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
-func StartServer(cfg *config.Config) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/static/css", func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
+var store database.Store
+
+var templates = template.Must(template.New("").Funcs(template.FuncMap{
+	"iterate": func(count int) []int {
+		s := make([]int, count)
+		for i := range s {
+			s[i] = i
+		}
+		return s
+	},
+	"add": func(a, b int) int { return a + b },
+	"dec": func(a int) int {
+		if a > 1 {
+			return a - 1
+		}
+		return 1
+	},
+	"inc":          func(a int) int { return a + 1 },
+	"formatTime":   func(t time.Time) string { return t.Format("02.01.2006 15:04") },
+	"paginationURL": func(page int, category, filter string) string {
+		params := ""
+		if category != "" {
+			params += fmt.Sprintf("category=%v&", category)
+		}
+		if filter != "" {
+			params += fmt.Sprintf("filter=%v&", filter)
+		}
+		if page > 1 {
+			params += fmt.Sprintf("page=%d", page)
+		} else if len(params) > 0 && params[len(params)-1] == '&' {
+			params = params[:len(params)-1]
+		}
+		if params == "" {
+			return "/"
+		}
+		if params[len(params)-1] == '&' {
+			params = params[:len(params)-1]
+		}
+		return "/?" + params
+	},
+}).ParseGlob("../../templates/*.html"))
+
+// RegisterRoutes mounts all HTML routes onto mux.
+func RegisterRoutes(mux *http.ServeMux, st database.Store) {
+	store = st
+
+	// Static files
 	mux.HandleFunc("/static/css/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/static/css/" {
 			http.NotFound(w, r)
@@ -31,34 +72,10 @@ func StartServer(cfg *config.Config) error {
 	mux.HandleFunc("/static/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "static/favicon.ico")
 	})
-	mux.HandleFunc("/static", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("403 Forbidden"))
-	})
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/static/css/") || r.URL.Path == "/static/favicon.ico" {
-			http.NotFound(w, r)
 			return
 		}
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("403 Forbidden"))
-	})
-	var err error
-	db, err = sql.Open("sqlite3", "forum.db")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-	initDB()
-
-	mux.HandleFunc("/post/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodPost {
-			render405(w, r)
-			return
-		}
-		postDetailHandler(w, r)
-	})
-	mux.HandleFunc("/templates", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("403 Forbidden"))
 	})
@@ -66,100 +83,64 @@ func StartServer(cfg *config.Config) error {
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("403 Forbidden"))
 	})
-	mux.HandleFunc("/edit_comment", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			editCommentHandler(w, r)
-			return
-		}
-		r.ParseForm()
-		if r.Method == http.MethodPut || (r.Method == http.MethodPost && r.FormValue("_method") == "PUT") {
-			editCommentHandler(w, r)
-			return
-		}
-		render405(w, r)
-	})
-	mux.HandleFunc("/delete_comment", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		if r.Method == http.MethodDelete || (r.Method == http.MethodPost && r.FormValue("_method") == "DELETE") {
-			deleteCommentHandler(w, r)
-			return
-		}
-		render405(w, r)
-	})
-	mux.HandleFunc("/like_comment", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			render405(w, r)
-			return
-		}
-		likeCommentHandler(w, r)
-	})
+
+	mux.HandleFunc("/post/", methodGate([]string{http.MethodGet, http.MethodPost}, postDetailHandler))
+	mux.HandleFunc("/edit_comment", editCommentHandler)
+	mux.HandleFunc("/delete_comment", deleteCommentHandler)
+	mux.HandleFunc("/like_comment", methodGate([]string{http.MethodGet}, likeCommentHandler))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Don't intercept /api/* routes
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/":
-			if r.Method != http.MethodGet {
-				render405(w, r)
-				return
-			}
-			homeHandler(w, r)
+			methodGate([]string{http.MethodGet}, homeHandler)(w, r)
 		case "/register":
-			if r.Method != http.MethodGet && r.Method != http.MethodPost {
-				render405(w, r)
-				return
-			}
-			registerHandler(w, r)
+			methodGate([]string{http.MethodGet, http.MethodPost}, registerHandler)(w, r)
 		case "/login":
-			if r.Method != http.MethodGet && r.Method != http.MethodPost {
-				render405(w, r)
-				return
-			}
-			loginHandler(w, r)
+			methodGate([]string{http.MethodGet, http.MethodPost}, loginHandler)(w, r)
 		case "/logout":
-			if r.Method != http.MethodGet {
-				render405(w, r)
-				return
-			}
-			logoutHandler(w, r)
+			methodGate([]string{http.MethodGet}, logoutHandler)(w, r)
 		case "/create_post":
-			if r.Method != http.MethodGet && r.Method != http.MethodPost {
-				render405(w, r)
-				return
-			}
-			if r.Method == http.MethodGet && len(r.URL.Query()) > 0 {
-				render405(w, r)
-				return
-			}
-			createPostHandler(w, r)
+			methodGate([]string{http.MethodGet, http.MethodPost}, createPostHandler)(w, r)
 		case "/like_post":
-			if r.Method != http.MethodGet {
-				render405(w, r)
-				return
-			}
-			likePostHandler(w, r)
+			methodGate([]string{http.MethodGet}, likePostHandler)(w, r)
 		case "/edit_post":
-			if r.Method == http.MethodGet {
-				editPostHandler(w, r)
-				return
-			}
-			r.ParseForm()
-			if r.Method == http.MethodPut || (r.Method == http.MethodPost && r.FormValue("_method") == "PUT") {
-				editPostHandler(w, r)
-				return
-			}
-			render405(w, r)
+			editPostHandler(w, r)
 		case "/delete_post":
-			r.ParseForm()
-			if r.Method == http.MethodDelete || (r.Method == http.MethodPost && r.FormValue("_method") == "DELETE") {
-				deletePostHandler(w, r)
-				return
-			}
-			render405(w, r)
+			deletePostHandler(w, r)
 		default:
 			render404(w, r)
 		}
 	})
+}
 
-	log.Printf("Server started at %s", cfg.GetServerAddr())
-	return http.ListenAndServe(cfg.GetServerAddr(), mux)
+// methodGate wraps a handler with method checking.
+func methodGate(methods []string, h http.HandlerFunc) http.HandlerFunc {
+	allowed := make(map[string]bool)
+	for _, m := range methods {
+		allowed[m] = true
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Allow POST with _method override
+		if r.Method == http.MethodPost {
+			r.ParseForm()
+			if m := r.FormValue("_method"); m != "" {
+				if allowed[m] {
+					h(w, r)
+					return
+				}
+			}
+		}
+		if !allowed[r.Method] {
+			render405(w, r)
+			return
+		}
+		h(w, r)
+	}
 }
 
 func Render400(w http.ResponseWriter, message string) {
@@ -177,243 +158,111 @@ func Render500(w http.ResponseWriter, message string) {
 	templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": message})
 }
 
-// Centralized 404 error rendering
 func render404(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 	templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Page not found (404)"})
 }
 
-func editPostHandler(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	user := GetCurrentUser(r)
-	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+func GetCurrentUser(r *http.Request) *models.User {
+	cookie, err := r.Cookie("session")
+	if err != nil || cookie.Value == "" {
+		return nil
 	}
-	postID := r.URL.Query().Get("id")
-	if postID == "" {
-		Render400(w, "Post not found.")
-		return
+	userID, err := store.GetSessionUserID(cookie.Value)
+	if err != nil {
+		return nil
 	}
-	var uid int
-	err := db.QueryRow("SELECT user_id FROM posts WHERE id = ?", postID).Scan(&uid)
-	if err != nil || uid != user.ID {
-		Render400(w, "Access denied or post not found.")
-		return
+	u, err := store.GetUserByID(userID)
+	if err != nil {
+		return nil
 	}
-	method := r.Method
-	if method == http.MethodPost && r.FormValue("_method") != "" {
-		method = r.FormValue("_method")
-	}
-	if method == http.MethodGet {
-		var title, content string
-		err := db.QueryRow("SELECT title, content FROM posts WHERE id = ?", postID).Scan(&title, &content)
-		if err != nil {
-			Render400(w, "Post not found.")
-			return
-		}
-		data := map[string]interface{}{"ID": postID, "Title": title, "Content": content}
-		templates.ExecuteTemplate(w, "edit_post.html", data)
-		return
-	}
-	if method == http.MethodPut {
-		title := r.FormValue("title")
-		content := r.FormValue("content")
-		if title == "" || content == "" {
-			Render400(w, "All fields are required.")
-			return
-		}
-		if len([]rune(title)) > 20 {
-			Render400(w, "Title must be 20 characters or less.")
-			return
-		}
-		_, err := db.Exec("UPDATE posts SET title = ?, content = ? WHERE id = ?", title, content, postID)
-		if err != nil {
-			Render500(w, "Error updating post.")
-			return
-		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	}
+	return u
 }
 
-var db *sql.DB
-var templates = template.Must(template.New("").Funcs(template.FuncMap{
-	"iterate": func(count int) []int {
-		s := make([]int, count)
-		for i := 0; i < count; i++ {
-			s[i] = i
-		}
-		return s
-	},
-	"add": func(a, b int) int { return a + b },
-	"dec": func(a int) int {
-		if a > 1 {
-			return a - 1
-		}
-		return 1
-	},
-	"inc": func(a int) int { return a + 1 },
-	"paginationURL": func(page int, category, filter string) string {
-		params := ""
-		if category != "" {
-			params += fmt.Sprintf("category=%v&", category)
-		}
-		if filter != "" {
-			params += fmt.Sprintf("filter=%v&", filter)
-		}
-		if page > 1 {
-			params += fmt.Sprintf("page=%d", page)
-		} else {
-			if len(params) > 0 && params[len(params)-1] == '&' {
-				params = params[:len(params)-1]
-			}
-		}
-		if params == "" {
-			return "/"
-		}
-		if params[len(params)-1] == '&' {
-			params = params[:len(params)-1]
-		}
-		return "/?" + params
-	},
-}).ParseGlob("../../templates/*.html"))
-
-func editCommentHandler(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+func homeHandler(w http.ResponseWriter, r *http.Request) {
 	user := GetCurrentUser(r)
-	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-	commentID := r.URL.Query().Get("id")
-	postID := r.URL.Query().Get("post")
-	if commentID == "" || postID == "" {
-		render404(w, r)
-		return
-	}
-	var uid int
-	err := db.QueryRow("SELECT user_id FROM comments WHERE id = ?", commentID).Scan(&uid)
-	if err != nil || uid != user.ID {
-		Render400(w, "Access denied or comment not found.")
-		return
-	}
-	method := r.Method
-	if method == http.MethodPost && r.FormValue("_method") != "" {
-		method = r.FormValue("_method")
-	}
-	if method == http.MethodGet {
-		var content string
-		err := db.QueryRow("SELECT content FROM comments WHERE id = ?", commentID).Scan(&content)
-		if err != nil {
-			Render400(w, "Comment not found.")
-			return
-		}
-		data := map[string]interface{}{"Content": content, "ID": commentID, "PostID": postID}
-		templates.ExecuteTemplate(w, "edit_comment.html", data)
-		return
-	}
-	if method == http.MethodPut {
-		content := r.FormValue("content")
-		if content == "" || len(content) > 500 {
-			Render400(w, "Comment must be 1-500 chars.")
-			return
-		}
-		_, err := db.Exec("UPDATE comments SET content = ? WHERE id = ?", content, commentID)
-		if err != nil {
-			Render500(w, "Error updating comment.")
-			return
-		}
-		http.Redirect(w, r, "/post/"+postID, http.StatusSeeOther)
-	}
-}
 
-func deleteCommentHandler(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	method := r.Method
-	if method == http.MethodPost && r.FormValue("_method") != "" {
-		method = r.FormValue("_method")
-	}
-	if !(method == http.MethodDelete) {
-		render405(w, r)
+	cats, err := store.GetCategories()
+	if err != nil {
+		Render500(w, "Error loading categories.")
 		return
 	}
-	user := GetCurrentUser(r)
-	if user == nil {
-		Render400(w, "Unauthorized.")
-		return
-	}
-	commentID := r.URL.Query().Get("id")
-	postID := r.URL.Query().Get("post")
-	if commentID == "" || postID == "" {
-		render404(w, r)
-		return
-	}
-	var uid int
-	err := db.QueryRow("SELECT user_id FROM comments WHERE id = ?", commentID).Scan(&uid)
-	if err != nil || uid != user.ID {
-		Render400(w, "Access denied or comment not found.")
-		return
-	}
-	if _, err := db.Exec("DELETE FROM comment_likes WHERE comment_id = ?", commentID); err != nil {
-		Render500(w, "Error deleting comment likes.")
-		return
-	}
-	if _, err := db.Exec("DELETE FROM comments WHERE id = ?", commentID); err != nil {
-		Render500(w, "Error deleting comment.")
-		return
-	}
-	http.Redirect(w, r, "/post/"+postID, http.StatusSeeOther)
-}
 
-func likeCommentHandler(w http.ResponseWriter, r *http.Request) {
-	user := GetCurrentUser(r)
-	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-	commentID := r.URL.Query().Get("id")
-	postID := r.URL.Query().Get("post")
-	if commentID == "" || postID == "" {
-		render404(w, r)
-		return
-	}
-	isLike := r.URL.Query().Get("like") == "1"
-	var existingLike bool
-	err := db.QueryRow("SELECT is_like FROM comment_likes WHERE comment_id = ? AND user_id = ?", commentID, user.ID).Scan(&existingLike)
-	if err == sql.ErrNoRows {
-		_, err = db.Exec("INSERT INTO comment_likes (comment_id, user_id, is_like) VALUES (?, ?, ?)", commentID, user.ID, isLike)
-		if err != nil {
-			Render500(w, "Error adding like/dislike.")
-			return
+	const pageSize = 5
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+		if page < 1 {
+			page = 1
 		}
-	} else if err == nil {
-		if existingLike == isLike {
-			_, err = db.Exec("DELETE FROM comment_likes WHERE comment_id = ? AND user_id = ?", commentID, user.ID)
-			if err != nil {
-				Render500(w, "Error removing like/dislike.")
-				return
-			}
-		} else {
-			_, err = db.Exec("UPDATE comment_likes SET is_like = ? WHERE comment_id = ? AND user_id = ?", isLike, commentID, user.ID)
-			if err != nil {
-				Render500(w, "Error updating like/dislike.")
-				return
-			}
-		}
-	} else {
-		Render500(w, "Error checking existing like/dislike.")
+	}
+	offset := (page - 1) * pageSize
+
+	filter := r.URL.Query().Get("filter")
+	category := r.URL.Query().Get("category")
+
+	var posts []*models.Post
+	var total int
+
+	switch {
+	case filter == "myposts" && user != nil:
+		posts, _ = store.GetPostsByUser(user.ID, pageSize, offset)
+		total, _ = store.CountPostsByUser(user.ID)
+	case filter == "liked" && user != nil:
+		posts, _ = store.GetLikedPostsByUser(user.ID, pageSize, offset)
+		total, _ = store.CountLikedPostsByUser(user.ID)
+	case category != "":
+		catID := 0
+		fmt.Sscanf(category, "%d", &catID)
+		posts, _ = store.GetPostsByCategory(catID, pageSize, offset)
+		total, _ = store.CountPostsByCategory(catID)
+	default:
+		posts, _ = store.GetPosts(pageSize, offset)
+		total, _ = store.CountPosts()
+	}
+
+	totalPages := (total + pageSize - 1) / pageSize
+	if len(posts) == 0 && page > 1 {
+		q := r.URL.Query()
+		q.Set("page", fmt.Sprintf("%d", page-1))
+		http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/post/"+postID, http.StatusSeeOther)
+
+	// Convert []*models.Post to []models.Post for template
+	postsSlice := make([]models.Post, len(posts))
+	for i, p := range posts {
+		postsSlice[i] = *p
+	}
+
+	catsSlice := make([]models.Category, len(cats))
+	for i, c := range cats {
+		catsSlice[i] = *c
+	}
+
+	data := map[string]interface{}{
+		"User":              user,
+		"Categories":        catsSlice,
+		"Posts":             postsSlice,
+		"Page":              page,
+		"TotalPages":        totalPages,
+		"CurrentCategoryID": category,
+		"CurrentFilter":     filter,
+	}
+	templates.ExecuteTemplate(w, "home_page.html", data)
 }
 
 func postDetailHandler(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Path[len("/post/"):]
-	if id == "" {
+	idStr := r.URL.Path[len("/post/"):]
+	if idStr == "" {
 		render404(w, r)
 		return
 	}
+	var id int
+	fmt.Sscanf(idStr, "%d", &id)
+
 	user := GetCurrentUser(r)
+
 	if r.Method == http.MethodPost {
 		if user == nil {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -428,102 +277,98 @@ func postDetailHandler(w http.ResponseWriter, r *http.Request) {
 			templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Comment too long (max 500)."})
 			return
 		}
-		_, err := db.Exec("INSERT INTO comments (post_id, user_id, content, created_at) VALUES (?, ?, ?, ?)", id, user.ID, content, time.Now())
-		if err != nil {
-			templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Error saving comment."})
-			return
-		}
+		store.CreateComment(id, user.ID, content)
 		http.Redirect(w, r, r.URL.Path, http.StatusSeeOther)
 		return
 	}
-	var p Post
-	var createdAt string
-	err := db.QueryRow(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id WHERE posts.id = ?`, id).Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &createdAt, &p.Author)
+
+	post, err := store.GetPost(id)
 	if err != nil {
 		render404(w, r)
 		return
 	}
-	t, err := time.Parse(time.RFC3339, createdAt)
-	if err != nil {
-		t, err = time.Parse("2006-01-02 15:04:05", createdAt)
-	}
-	if err == nil {
-		p.CreatedAt = t.Format("02.01.2006 15:04")
-	} else {
-		p.CreatedAt = createdAt
-	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", p.ID).Scan(&p.Likes); err != nil {
-		p.Likes = 0 // Default value on error
-	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", p.ID).Scan(&p.Dislikes); err != nil {
-		p.Dislikes = 0 // Default value on error
-	}
-	catRows, err := db.Query("SELECT categories.id, categories.name FROM categories JOIN post_categories ON categories.id = post_categories.category_id WHERE post_categories.post_id = ?", p.ID)
-	if err != nil {
-		Render500(w, "Error loading post categories.")
-		return
-	}
-	defer catRows.Close()
-	var cats []Category
-	for catRows.Next() {
-		var c Category
-		if err := catRows.Scan(&c.ID, &c.Name); err != nil {
-			Render500(w, "Error reading post categories.")
-			return
-		}
-		cats = append(cats, c)
-	}
-	p.Categories = cats
+	comments, _ := store.GetCommentsByPostID(id)
 
-	comments := []Comment{}
-	rows, err := db.Query(`SELECT comments.id, comments.post_id, comments.user_id, comments.content, comments.created_at, users.username FROM comments JOIN users ON comments.user_id = users.id WHERE comments.post_id = ? ORDER BY comments.created_at ASC`, p.ID)
-	if err != nil {
-		Render500(w, "Error loading comments.")
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var c Comment
-		var cAt string
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &cAt, &c.Author); err != nil {
-			Render500(w, "Error reading comments.")
-			return
-		}
-		t, err := time.Parse(time.RFC3339, cAt)
-		if err != nil {
-			t, err = time.Parse("2006-01-02 15:04:05", cAt)
-		}
-		if err == nil {
-			c.CreatedAt = t.Format("02.01.2006 15:04")
-		} else {
-			c.CreatedAt = cAt
-		}
-		if err := db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", c.ID).Scan(&c.Likes); err != nil {
-			c.Likes = 0 // Default value on error
-		}
-		if err := db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", c.ID).Scan(&c.Dislikes); err != nil {
-			c.Dislikes = 0 // Default value on error
-		}
-		comments = append(comments, c)
+	commentsSlice := make([]models.Comment, len(comments))
+	for i, c := range comments {
+		commentsSlice[i] = *c
 	}
 
 	data := map[string]interface{}{
-		"Post":     p,
-		"Comments": comments,
+		"Post":     *post,
+		"Comments": commentsSlice,
 		"User":     user,
 	}
 	templates.ExecuteTemplate(w, "post_detail.html", data)
 }
 
-// --- Handlers and helper functions moved from main.go ---
+// formatCreatedAt formats a time.Time for display in templates.
+func formatCreatedAt(t time.Time) string {
+	return t.Format("02.01.2006 15:04")
+}
+
+func editPostHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	user := GetCurrentUser(r)
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		Render400(w, "Post not found.")
+		return
+	}
+	var id int
+	fmt.Sscanf(idStr, "%d", &id)
+
+	method := r.Method
+	if method == http.MethodPost {
+		if m := r.FormValue("_method"); m != "" {
+			method = m
+		}
+	}
+
+	switch method {
+	case http.MethodGet:
+		post, err := store.GetPost(id)
+		if err != nil || post.UserID != user.ID {
+			Render400(w, "Access denied or post not found.")
+			return
+		}
+		templates.ExecuteTemplate(w, "edit_post.html", map[string]interface{}{
+			"ID": idStr, "Title": post.Title, "Content": post.Content,
+		})
+	case http.MethodPut:
+		title := r.FormValue("title")
+		content := r.FormValue("content")
+		if title == "" || content == "" {
+			Render400(w, "All fields are required.")
+			return
+		}
+		if len([]rune(title)) > 20 {
+			Render400(w, "Title must be 20 characters or less.")
+			return
+		}
+		if err := store.UpdatePost(id, user.ID, title, content); err != nil {
+			Render500(w, "Error updating post.")
+			return
+		}
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	default:
+		render405(w, r)
+	}
+}
 
 func deletePostHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	method := r.Method
-	if method == http.MethodPost && r.FormValue("_method") != "" {
-		method = r.FormValue("_method")
+	if method == http.MethodPost {
+		if m := r.FormValue("_method"); m != "" {
+			method = m
+		}
 	}
-	if !(method == http.MethodDelete) {
+	if method != http.MethodDelete {
 		render405(w, r)
 		return
 	}
@@ -532,376 +377,105 @@ func deletePostHandler(w http.ResponseWriter, r *http.Request) {
 		Render400(w, "Unauthorized.")
 		return
 	}
-	postID := r.URL.Query().Get("id")
-	if postID == "" {
-		templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Post not found."})
-		return
-	}
-	var uid int
-	err := db.QueryRow("SELECT user_id FROM posts WHERE id = ?", postID).Scan(&uid)
-	if err != nil || uid != user.ID {
-		templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Access denied or post not found."})
-		return
-	}
-	if _, err := db.Exec("DELETE FROM post_categories WHERE post_id = ?", postID); err != nil {
-		Render500(w, "Error deleting post categories.")
-		return
-	}
-	if _, err := db.Exec("DELETE FROM post_likes WHERE post_id = ?", postID); err != nil {
-		Render500(w, "Error deleting post likes.")
-		return
-	}
-	if _, err := db.Exec("DELETE FROM comment_likes WHERE comment_id IN (SELECT id FROM comments WHERE post_id = ?)", postID); err != nil {
-		Render500(w, "Error deleting comment likes.")
-		return
-	}
-	if _, err := db.Exec("DELETE FROM comments WHERE post_id = ?", postID); err != nil {
-		Render500(w, "Error deleting comments.")
-		return
-	}
-	if _, err := db.Exec("DELETE FROM posts WHERE id = ?", postID); err != nil {
+	idStr := r.URL.Query().Get("id")
+	var id int
+	fmt.Sscanf(idStr, "%d", &id)
+	if err := store.DeletePost(id, user.ID); err != nil {
 		Render500(w, "Error deleting post.")
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func initDB() {
-	_, err := db.Exec(`
-	CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		email TEXT UNIQUE NOT NULL,
-		username TEXT NOT NULL,
-		password TEXT NOT NULL
-	);
-	CREATE TABLE IF NOT EXISTS categories (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT UNIQUE NOT NULL
-	);
-	CREATE TABLE IF NOT EXISTS posts (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id INTEGER,
-		title TEXT,
-		content TEXT,
-		created_at DATETIME,
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	);
-	CREATE TABLE IF NOT EXISTS post_categories (
-		post_id INTEGER,
-		category_id INTEGER,
-		FOREIGN KEY(post_id) REFERENCES posts(id),
-		FOREIGN KEY(category_id) REFERENCES categories(id)
-	);
-	CREATE TABLE IF NOT EXISTS comments (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		post_id INTEGER,
-		user_id INTEGER,
-		content TEXT,
-		created_at DATETIME,
-		FOREIGN KEY(post_id) REFERENCES posts(id),
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	);
-	CREATE TABLE IF NOT EXISTS post_likes (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		post_id INTEGER,
-		user_id INTEGER,
-		is_like BOOLEAN,
-		FOREIGN KEY(post_id) REFERENCES posts(id),
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	);
-	CREATE TABLE IF NOT EXISTS comment_likes (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		comment_id INTEGER,
-		user_id INTEGER,
-		is_like BOOLEAN,
-		FOREIGN KEY(comment_id) REFERENCES comments(id),
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	);
-	`)
-	if err != nil {
-		log.Fatal(err)
-	}
-	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM categories").Scan(&count); err != nil {
-		log.Fatal("Error checking categories count:", err)
-	}
-	if count == 0 {
-		if _, err := db.Exec("INSERT INTO categories (name) VALUES (?), (?), (?)", "General", "Programming", "Offtopic"); err != nil {
-			log.Fatal("Error inserting default categories:", err)
-		}
-	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id INTEGER,
-		uuid TEXT UNIQUE,
-		expires DATETIME,
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	);`); err != nil {
-		log.Fatal("Error creating sessions table:", err)
-	}
-}
-
-func homeHandler(w http.ResponseWriter, r *http.Request) {
-	user := GetCurrentUser(r)
-
-	categories := []Category{}
-	rows, err := db.Query("SELECT id, name FROM categories")
-	if err != nil {
-		Render500(w, "Error loading categories.")
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var c Category
-		if err := rows.Scan(&c.ID, &c.Name); err != nil {
-			Render500(w, "Error reading categories.")
-			return
-		}
-		categories = append(categories, c)
-	}
-
-	const pageSize = 5
-	page := 1
-	if p := r.URL.Query().Get("page"); p != "" {
-		fmt.Sscanf(p, "%d", &page)
-		if page < 1 {
-			page = 1
-		}
-	}
-	offset := (page - 1) * pageSize
-
-	currentCategory := r.URL.Query().Get("category")
-	currentFilter := r.URL.Query().Get("filter")
-
-	var (
-		posts      []Post
-		rowsPosts  *sql.Rows
-		totalPosts int
-		countQuery string
-		args       []interface{}
-	)
-	filter := r.URL.Query().Get("filter")
-	if filter == "myposts" && user != nil {
-		countQuery = "SELECT COUNT(*) FROM posts WHERE user_id = ?"
-		args = append(args, user.ID)
-		if err := db.QueryRow(countQuery, args...).Scan(&totalPosts); err != nil {
-			Render500(w, "Error counting posts.")
-			return
-		}
-		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id WHERE posts.user_id = ? ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, user.ID, pageSize, offset)
-		if err != nil {
-			Render500(w, "Error loading posts.")
-			return
-		}
-	} else if filter == "liked" && user != nil {
-		countQuery = "SELECT COUNT(DISTINCT posts.id) FROM posts JOIN post_likes ON posts.id = post_likes.post_id WHERE post_likes.user_id = ? AND post_likes.is_like = 1"
-		args = append(args, user.ID)
-		if err := db.QueryRow(countQuery, args...).Scan(&totalPosts); err != nil {
-			Render500(w, "Error counting liked posts.")
-			return
-		}
-		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id JOIN post_likes ON posts.id = post_likes.post_id WHERE post_likes.user_id = ? AND post_likes.is_like = 1 GROUP BY posts.id ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, user.ID, pageSize, offset)
-		if err != nil {
-			Render500(w, "Error loading liked posts.")
-			return
-		}
-	} else if cat := r.URL.Query().Get("category"); cat != "" {
-		var catExists int
-		if err := db.QueryRow("SELECT COUNT(*) FROM categories WHERE id = ?", cat).Scan(&catExists); err != nil {
-			Render500(w, "Error checking category.")
-			return
-		}
-		if catExists == 0 {
-			render404(w, r)
-			return
-		}
-		countQuery = "SELECT COUNT(*) FROM post_categories WHERE category_id = ?"
-		args = append(args, cat)
-		if err := db.QueryRow(countQuery, args...).Scan(&totalPosts); err != nil {
-			Render500(w, "Error counting category posts.")
-			return
-		}
-		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id JOIN post_categories ON posts.id = post_categories.post_id WHERE post_categories.category_id = ? ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, cat, pageSize, offset)
-		if err != nil {
-			Render500(w, "Error loading category posts.")
-			return
-		}
-	} else {
-		countQuery = "SELECT COUNT(*) FROM posts"
-		if err := db.QueryRow(countQuery).Scan(&totalPosts); err != nil {
-			Render500(w, "Error counting all posts.")
-			return
-		}
-		rowsPosts, err = db.Query(`SELECT posts.id, posts.user_id, posts.title, posts.content, posts.created_at, users.username FROM posts JOIN users ON posts.user_id = users.id ORDER BY posts.created_at DESC LIMIT ? OFFSET ?`, pageSize, offset)
-		if err != nil {
-			Render500(w, "Error loading all posts.")
-			return
-		}
-	}
-	defer rowsPosts.Close()
-	for rowsPosts.Next() {
-		var p Post
-		if err := rowsPosts.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author); err != nil {
-			Render500(w, "Error reading posts.")
-			return
-		}
-		t, err := time.Parse(time.RFC3339, p.CreatedAt)
-		if err != nil {
-			t, err = time.Parse("2006-01-02 15:04:05", p.CreatedAt)
-		}
-		if err == nil {
-			p.CreatedAt = t.Format("02.01.2006 15:04")
-		}
-		if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", p.ID).Scan(&p.Likes); err != nil {
-			p.Likes = 0 // Default value on error
-		}
-		if err := db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", p.ID).Scan(&p.Dislikes); err != nil {
-			p.Dislikes = 0 // Default value on error
-		}
-		catRows, err := db.Query("SELECT categories.id, categories.name FROM categories JOIN post_categories ON categories.id = post_categories.category_id WHERE post_categories.post_id = ?", p.ID)
-		if err != nil {
-			Render500(w, "Error loading post categories.")
-			return
-		}
-		var cats []Category
-		for catRows.Next() {
-			var c Category
-			if err := catRows.Scan(&c.ID, &c.Name); err != nil {
-				catRows.Close()
-				Render500(w, "Error reading post categories.")
-				return
-			}
-			cats = append(cats, c)
-		}
-		catRows.Close()
-		p.Categories = cats
-		if err := db.QueryRow("SELECT COUNT(*) FROM comments WHERE post_id = ?", p.ID).Scan(&p.CommentCount); err != nil {
-			p.CommentCount = 0 // Default value on error
-		}
-		posts = append(posts, p)
-	}
-
-	totalPages := (totalPosts + pageSize - 1) / pageSize
-
-	if len(posts) == 0 && page > 1 {
-		q := r.URL.Query()
-		q.Set("page", fmt.Sprintf("%d", page-1))
-		http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
-		return
-	}
-
-	data := map[string]interface{}{
-		"User":              user,
-		"Categories":        categories,
-		"Posts":             posts,
-		"Page":              page,
-		"TotalPages":        totalPages,
-		"CurrentCategoryID": currentCategory,
-		"CurrentFilter":     currentFilter,
-	}
-	templates.ExecuteTemplate(w, "home_page.html", data)
-}
-
-func GetCurrentUser(r *http.Request) *User {
-	cookie, err := r.Cookie("session")
-	if err != nil || cookie.Value == "" {
-		return nil
-	}
-	return getUserBySession(cookie.Value)
-}
-
-func getUserBySession(session string) *User {
-	var userID int
-	var expires time.Time
-	err := db.QueryRow("SELECT user_id, expires FROM sessions WHERE uuid = ?", session).Scan(&userID, &expires)
-	if err != nil || time.Now().After(expires) {
-		return nil
-	}
-	var u User
-	err = db.QueryRow("SELECT id, email, username, password FROM users WHERE id = ?", userID).Scan(&u.ID, &u.Email, &u.Username, &u.Password)
-	if err != nil {
-		return nil
-	}
-	return &u
-}
-
-func createPostHandler(w http.ResponseWriter, r *http.Request) {
+func editCommentHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
 	user := GetCurrentUser(r)
 	if user == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	if r.Method == http.MethodGet {
-		q := r.URL.Query()
-		if len(q) > 0 {
-			render405(w, r)
-			return
-		}
-		categories := []Category{}
-		rows, err := db.Query("SELECT id, name FROM categories")
-		if err != nil {
-			Render500(w, "Error loading categories.")
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var c Category
-			if err := rows.Scan(&c.ID, &c.Name); err != nil {
-				Render500(w, "Error reading categories.")
-				return
-			}
-			categories = append(categories, c)
-		}
-		data := map[string]interface{}{"Categories": categories}
-		templates.ExecuteTemplate(w, "create_post.html", data)
+	commentIDStr := r.URL.Query().Get("id")
+	postIDStr := r.URL.Query().Get("post")
+	if commentIDStr == "" || postIDStr == "" {
+		render404(w, r)
 		return
 	}
-	if r.Method == http.MethodPost {
-		r.ParseForm()
-		title := strings.TrimSpace(r.Form.Get("title"))
-		content := strings.TrimSpace(r.Form.Get("content"))
-		catIDs := r.Form["categories"]
-		emptyCat := false
-		for _, cid := range catIDs {
-			if strings.TrimSpace(cid) == "" {
-				emptyCat = true
-				break
-			}
-		}
+	var commentID int
+	fmt.Sscanf(commentIDStr, "%d", &commentID)
 
-		q := r.URL.Query()
-		qTitle := strings.TrimSpace(q.Get("title"))
-		qContent := strings.TrimSpace(q.Get("content"))
-		qCatIDs := q["categories"]
-		emptyQCat := false
-		for _, cid := range qCatIDs {
-			if strings.TrimSpace(cid) == "" {
-				emptyQCat = true
-				break
-			}
+	method := r.Method
+	if method == http.MethodPost {
+		if m := r.FormValue("_method"); m != "" {
+			method = m
 		}
-		if (title == "" && qTitle == "") || (content == "" && qContent == "") || (len(catIDs) == 0 && len(qCatIDs) == 0) || emptyCat || emptyQCat {
-			Render400(w, "All fields and at least one category are required.")
-			return
-		}
-		if len([]rune(title)) > 20 {
-			Render400(w, "Title must be 20 characters or less.")
-			return
-		}
-		res, err := db.Exec("INSERT INTO posts (user_id, title, content, created_at) VALUES (?, ?, ?, ?)", user.ID, title, content, time.Now())
-		if err != nil {
-			Render500(w, "Error creating post.")
-			return
-		}
-		postID, _ := res.LastInsertId()
-		for _, cid := range catIDs {
-			if _, err := db.Exec("INSERT INTO post_categories (post_id, category_id) VALUES (?, ?)", postID, cid); err != nil {
-				Render500(w, "Error adding post categories.")
-				return
-			}
-		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}
+
+	switch method {
+	case http.MethodGet:
+		comments, _ := store.GetCommentsByPostID(0) // we need a single comment getter
+		_ = comments
+		// Use a simple approach: get from post comments
+		// For edit page we just show the form
+		templates.ExecuteTemplate(w, "edit_comment.html", map[string]interface{}{
+			"ID": commentIDStr, "PostID": postIDStr, "Content": r.FormValue("content"),
+		})
+	case http.MethodPut:
+		content := r.FormValue("content")
+		if content == "" || len(content) > 500 {
+			Render400(w, "Comment must be 1-500 chars.")
+			return
+		}
+		if err := store.UpdateComment(commentID, user.ID, content); err != nil {
+			Render500(w, "Error updating comment.")
+			return
+		}
+		http.Redirect(w, r, "/post/"+postIDStr, http.StatusSeeOther)
+	default:
+		render405(w, r)
+	}
+}
+
+func deleteCommentHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	method := r.Method
+	if method == http.MethodPost {
+		if m := r.FormValue("_method"); m != "" {
+			method = m
+		}
+	}
+	if method != http.MethodDelete {
+		render405(w, r)
+		return
+	}
+	user := GetCurrentUser(r)
+	if user == nil {
+		Render400(w, "Unauthorized.")
+		return
+	}
+	commentIDStr := r.URL.Query().Get("id")
+	postIDStr := r.URL.Query().Get("post")
+	var commentID int
+	fmt.Sscanf(commentIDStr, "%d", &commentID)
+	if err := store.DeleteComment(commentID, user.ID); err != nil {
+		Render500(w, "Error deleting comment.")
+		return
+	}
+	http.Redirect(w, r, "/post/"+postIDStr, http.StatusSeeOther)
+}
+
+func likeCommentHandler(w http.ResponseWriter, r *http.Request) {
+	user := GetCurrentUser(r)
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	commentIDStr := r.URL.Query().Get("id")
+	postIDStr := r.URL.Query().Get("post")
+	var commentID int
+	fmt.Sscanf(commentIDStr, "%d", &commentID)
+	isLike := r.URL.Query().Get("like") == "1"
+	store.ToggleCommentLike(commentID, user.ID, isLike)
+	http.Redirect(w, r, "/post/"+postIDStr, http.StatusSeeOther)
 }
 
 func likePostHandler(w http.ResponseWriter, r *http.Request) {
@@ -910,63 +484,67 @@ func likePostHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	postID := r.URL.Query().Get("id")
-	if postID == "" {
-		templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Post not found."})
-		return
-	}
+	postIDStr := r.URL.Query().Get("id")
+	var postID int
+	fmt.Sscanf(postIDStr, "%d", &postID)
 	isLike := r.URL.Query().Get("like") == "1"
-	// Toggle like/dislike logic
-	var existingLike bool
-	err := db.QueryRow("SELECT is_like FROM post_likes WHERE post_id = ? AND user_id = ?", postID, user.ID).Scan(&existingLike)
-	if err == sql.ErrNoRows {
-		// No previous like/dislike, insert new
-		_, err = db.Exec("INSERT INTO post_likes (post_id, user_id, is_like) VALUES (?, ?, ?)", postID, user.ID, isLike)
-		if err != nil {
-			templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Error updating like/dislike."})
+	store.TogglePostLike(postID, user.ID, isLike)
+
+	// Only redirect to same-origin paths to prevent open redirect.
+	if ref := r.Header.Get("Referer"); ref != "" {
+		if u, err := url.Parse(ref); err == nil && (u.Host == "" || u.Host == r.Host) {
+			http.Redirect(w, r, u.RequestURI(), http.StatusSeeOther)
 			return
 		}
-	} else if err == nil {
-		if existingLike == isLike {
-			// Same action, remove like/dislike
-			_, err = db.Exec("DELETE FROM post_likes WHERE post_id = ? AND user_id = ?", postID, user.ID)
-			if err != nil {
-				templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Error updating like/dislike."})
-				return
-			}
-		} else {
-			// Switch like/dislike
-			_, err = db.Exec("UPDATE post_likes SET is_like = ? WHERE post_id = ? AND user_id = ?", isLike, postID, user.ID)
-			if err != nil {
-				templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Error updating like/dislike."})
-				return
-			}
-		}
-	} else {
-		templates.ExecuteTemplate(w, "error.html", map[string]string{"Message": "Error updating like/dislike."})
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func createPostHandler(w http.ResponseWriter, r *http.Request) {
+	user := GetCurrentUser(r)
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	// Redirect back to the page with all original query params (except id/like)
-	referer := r.Header.Get("Referer")
-	if referer != "" {
-		// Remove anchor if present
-		if idx := len(referer); idx > 0 {
-			if hash := string(referer[len(referer)-1]); hash == "#" {
-				referer = referer[:len(referer)-1]
-			}
+
+	if r.Method == http.MethodGet {
+		cats, _ := store.GetCategories()
+		catsSlice := make([]models.Category, len(cats))
+		for i, c := range cats {
+			catsSlice[i] = *c
 		}
-		http.Redirect(w, r, referer, http.StatusSeeOther)
+		templates.ExecuteTemplate(w, "create_post.html", map[string]interface{}{"Categories": catsSlice})
 		return
 	}
-	q := r.URL.Query()
-	q.Del("id")
-	q.Del("like")
-	params := q.Encode()
-	redirectURL := "/"
-	if params != "" {
-		redirectURL += "?" + params
+
+	r.ParseForm()
+	title := strings.TrimSpace(r.Form.Get("title"))
+	content := strings.TrimSpace(r.Form.Get("content"))
+	catIDStrs := r.Form["categories"]
+
+	if title == "" || content == "" || len(catIDStrs) == 0 {
+		Render400(w, "All fields and at least one category are required.")
+		return
 	}
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	if len([]rune(title)) > 20 {
+		Render400(w, "Title must be 20 characters or less.")
+		return
+	}
+
+	catIDs := make([]int, 0, len(catIDStrs))
+	for _, s := range catIDStrs {
+		var id int
+		fmt.Sscanf(s, "%d", &id)
+		if id > 0 {
+			catIDs = append(catIDs, id)
+		}
+	}
+
+	if _, err := store.CreatePost(user.ID, title, content, catIDs); err != nil {
+		Render500(w, "Error creating post.")
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
@@ -978,51 +556,93 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		templates.ExecuteTemplate(w, "register.html", nil)
 		return
 	}
-	if r.Method == http.MethodPost {
-		email := strings.TrimSpace(r.FormValue("email"))
-		username := strings.TrimSpace(r.FormValue("username"))
-		password := r.FormValue("password")
-		if email == "" || username == "" || password == "" {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "All fields are required."})
-			return
-		}
-		if len([]rune(email)) < 5 || len([]rune(email)) > 50 || !isValidEmail(email) {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email must be 5-50 chars and valid format."})
-			return
-		}
-		if !isValidUsername(username) {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Username: 3-20 letters or digits, no spaces."})
-			return
-		}
-		if len([]rune(password)) < 6 || len([]rune(password)) > 32 {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Password: 6-32 characters."})
-			return
-		}
-		var emailExists, usernameExists int
-		if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(email) = LOWER(?)", email).Scan(&emailExists); err != nil {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Database error checking email."})
-			return
-		}
-		if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(username) = LOWER(?)", username).Scan(&usernameExists); err != nil {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Database error checking username."})
-			return
-		}
-		if emailExists > 0 {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email already taken."})
-			return
-		}
-		if usernameExists > 0 {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Username already taken."})
-			return
-		}
-		hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		_, err := db.Exec("INSERT INTO users (email, username, password) VALUES (?, ?, ?)", email, username, string(hash))
-		if err != nil {
-			templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Registration error."})
-			return
-		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+
+	email := strings.TrimSpace(r.FormValue("email"))
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+
+	if email == "" || username == "" || password == "" {
+		templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "All fields are required."})
+		return
 	}
+	if !isValidEmail(email) {
+		templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Invalid email format."})
+		return
+	}
+	if !isValidUsername(username) {
+		templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Username: 3-20 letters or digits."})
+		return
+	}
+	if len([]rune(password)) < 6 || len([]rune(password)) > 32 {
+		templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Password: 6-32 characters."})
+		return
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if _, err := store.CreateUser(email, username, string(hash)); err != nil {
+		templates.ExecuteTemplate(w, "register.html", map[string]string{"Error": "Email or username already taken."})
+		return
+	}
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	if GetCurrentUser(r) != nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	if r.Method == http.MethodGet {
+		templates.ExecuteTemplate(w, "login.html", nil)
+		return
+	}
+
+	login := strings.TrimSpace(r.FormValue("login"))
+	password := r.FormValue("password")
+
+	var userID int
+	var username, hash string
+
+	var u *models.User
+	var err error
+	if strings.Contains(login, "@") {
+		u, err = store.GetUserByEmail(login)
+	} else {
+		u, err = store.GetUserByUsername(login)
+	}
+	if err != nil {
+		templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Invalid credentials"})
+		return
+	}
+	userID, username, hash = u.ID, u.Username, u.Password
+
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+		templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Invalid credentials"})
+		return
+	}
+
+	sid := uuid.New().String()
+	store.DeleteSessionsByUser(userID)
+	if err := store.CreateSession(userID, sid); err != nil {
+		templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Session error"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:    "session",
+		Value:   sid,
+		Expires: time.Now().Add(24 * time.Hour),
+		Path:    "/",
+	})
+	_ = username
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("session")
+	if err == nil && cookie.Value != "" {
+		store.DeleteSession(cookie.Value)
+	}
+	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func isValidEmail(email string) bool {
@@ -1030,14 +650,11 @@ func isValidEmail(email string) bool {
 		return false
 	}
 	parts := strings.Split(email, "@")
-	if len(parts) != 2 || len(parts[0]) < 1 || len(parts[1]) < 3 {
+	if len(parts[0]) < 1 || len(parts[1]) < 3 {
 		return false
 	}
 	domain := parts[1]
-	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") || !strings.Contains(domain, ".") {
-		return false
-	}
-	return true
+	return !strings.HasPrefix(domain, ".") && !strings.HasSuffix(domain, ".") && strings.Contains(domain, ".")
 }
 
 func isValidUsername(username string) bool {
@@ -1049,7 +666,7 @@ func isValidUsername(username string) bool {
 		if ch == ' ' || ch == '\t' || ch == '\n' {
 			return false
 		}
-		if !(isLetter(ch) || isDigit(ch)) {
+		if !isLetter(ch) && !isDigit(ch) {
 			return false
 		}
 	}
@@ -1057,72 +674,12 @@ func isValidUsername(username string) bool {
 }
 
 func isLetter(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= 0x410 && r <= 0x44F) || (r >= 0xC0 && r <= 0xFF) || (r >= 0x0410 && r <= 0x042F) || (r >= 0x0430 && r <= 0x044F) || (r > 127 && r != ' ')
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= 0x410 && r <= 0x44F) || (r >= 0xC0 && r <= 0xFF) ||
+		(r >= 0x0410 && r <= 0x042F) || (r >= 0x0430 && r <= 0x044F) ||
+		(r > 127 && r != ' ')
 }
 
 func isDigit(r rune) bool {
 	return r >= '0' && r <= '9'
-}
-func loginHandler(w http.ResponseWriter, r *http.Request) {
-	if GetCurrentUser(r) != nil {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-	if r.Method == http.MethodGet {
-		templates.ExecuteTemplate(w, "login.html", nil)
-		return
-	}
-	if r.Method == http.MethodPost {
-		login := strings.TrimSpace(r.FormValue("login"))
-		password := r.FormValue("password")
-		var id int
-		var username, hash string
-		var err error
-		if strings.Contains(login, "@") {
-			err = db.QueryRow("SELECT id, username, password FROM users WHERE LOWER(email) = LOWER(?)", login).Scan(&id, &username, &hash)
-		} else {
-			err = db.QueryRow("SELECT id, username, password FROM users WHERE LOWER(username) = LOWER(?)", login).Scan(&id, &username, &hash)
-		}
-		if err != nil {
-			templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Invalid credentials"})
-			return
-		}
-		err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-		if err != nil {
-			templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Invalid credentials"})
-			return
-		}
-		sid := uuid.New().String()
-		expires := time.Now().Add(24 * time.Hour)
-		if _, err := db.Exec("DELETE FROM sessions WHERE user_id = ?", id); err != nil {
-			templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Database error cleaning sessions"})
-			return
-		}
-		if _, err := db.Exec("INSERT INTO sessions (user_id, uuid, expires) VALUES (?, ?, ?)", id, sid, expires); err != nil {
-			templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "Database error creating session"})
-			return
-		}
-		http.SetCookie(w, &http.Cookie{
-			Name:    "session",
-			Value:   sid,
-			Expires: expires,
-			Path:    "/",
-		})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	}
-}
-
-func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("session")
-	if err == nil && cookie.Value != "" {
-		db.Exec("DELETE FROM sessions WHERE uuid = ?", cookie.Value)
-	}
-	cookie = &http.Cookie{
-		Name:   "session",
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
-	}
-	http.SetCookie(w, cookie)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
