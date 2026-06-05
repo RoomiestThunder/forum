@@ -499,8 +499,8 @@ func (s *PostgresStore) GetPostLikesCount(postID int) (int, int, error) {
 
 func (s *PostgresStore) GetCommentLikesCount(commentID int) (int, int, error) {
 	var likes, dislikes int
-	s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = TRUE", commentID).Scan(&likes)
-	s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = FALSE", commentID).Scan(&dislikes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = TRUE", commentID).Scan(&likes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = FALSE", commentID).Scan(&dislikes)
 	return likes, dislikes, nil
 }
 

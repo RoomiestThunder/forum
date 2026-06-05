@@ -576,15 +576,15 @@ func (s *SQLiteStore) ToggleCommentLike(commentID, userID int, isLike bool) erro
 
 func (s *SQLiteStore) GetPostLikesCount(postID int) (int, int, error) {
 	var likes, dislikes int
-	s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", postID).Scan(&likes)
-	s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", postID).Scan(&dislikes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 1", postID).Scan(&likes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND is_like = 0", postID).Scan(&dislikes)
 	return likes, dislikes, nil
 }
 
 func (s *SQLiteStore) GetCommentLikesCount(commentID int) (int, int, error) {
 	var likes, dislikes int
-	s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", commentID).Scan(&likes)
-	s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", commentID).Scan(&dislikes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", commentID).Scan(&likes)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", commentID).Scan(&dislikes)
 	return likes, dislikes, nil
 }
 
