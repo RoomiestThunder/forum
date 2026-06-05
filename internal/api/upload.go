@@ -23,7 +23,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "file field required", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	userID := userIDFromCtx(r)
 

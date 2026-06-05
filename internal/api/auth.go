@@ -159,7 +159,7 @@ func (s *Server) refreshToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r)
-	s.store.DeleteRefreshTokensByUser(userID)
+	_ = s.store.DeleteRefreshTokensByUser(userID)
 	jsonResponse(w, map[string]string{"message": "logged out"}, http.StatusOK)
 }
 

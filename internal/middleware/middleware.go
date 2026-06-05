@@ -11,6 +11,11 @@ import (
 	"forum/internal/handlers"
 )
 
+type contextKey string
+
+const keyUserID contextKey = "userID"
+const keyRequestID contextKey = "requestID"
+
 // Handler is a wrapper for HTTP handlers to support middleware chaining.
 type Handler func(http.ResponseWriter, *http.Request) error
 
@@ -84,7 +89,7 @@ func AuthMiddleware(next Handler) Handler {
 		}
 
 		// Store userID in request context for downstream handlers
-		ctx := context.WithValue(r.Context(), "userID", userID)
+		ctx := context.WithValue(r.Context(), keyUserID, userID)
 		*r = *r.WithContext(ctx)
 
 		return next(w, r)
@@ -96,7 +101,7 @@ func OptionalAuthMiddleware(next Handler) Handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		userID := getUserIDFromSession(w, r)
 		if userID != 0 {
-			ctx := context.WithValue(r.Context(), "userID", userID)
+			ctx := context.WithValue(r.Context(), keyUserID, userID)
 			*r = *r.WithContext(ctx)
 		}
 		return next(w, r)
@@ -239,7 +244,7 @@ func RequestIDMiddleware(next Handler) Handler {
 			requestID = time.Now().Format("20060102150405") + "_" + r.RemoteAddr
 		}
 
-		ctx := context.WithValue(r.Context(), "requestID", requestID)
+		ctx := context.WithValue(r.Context(), keyRequestID, requestID)
 		*r = *r.WithContext(ctx)
 
 		w.Header().Set("X-Request-ID", requestID)

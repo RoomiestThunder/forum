@@ -50,7 +50,7 @@ func New(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Client, e
 		}
 		// Make bucket publicly readable for images
 		policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/*"]}]}`, bucket)
-		mc.SetBucketPolicy(ctx, bucket, policy)
+		_ = mc.SetBucketPolicy(ctx, bucket, policy)
 	}
 
 	return &Client{minio: mc, bucketName: bucket}, nil
@@ -87,7 +87,7 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, filename string, size 
 		ContentType: contentType,
 	})
 	if limited.exceeded {
-		c.minio.RemoveObject(ctx, c.bucketName, objectKey, minio.RemoveObjectOptions{})
+		_ = c.minio.RemoveObject(ctx, c.bucketName, objectKey, minio.RemoveObjectOptions{})
 		return "", "", "", 0, fmt.Errorf("file too large (max 5MB)")
 	}
 	if err != nil {

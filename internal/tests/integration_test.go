@@ -16,7 +16,6 @@ import (
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
@@ -25,8 +24,8 @@ func setupPostgres(t *testing.T) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := postgres.RunContainer(ctx,
-		testcontainers.WithImage("postgres:16-alpine"),
+	container, err := postgres.Run(ctx,
+		"postgres:16-alpine",
 		postgres.WithDatabase("forum_test"),
 		postgres.WithUsername("forum"),
 		postgres.WithPassword("forum"),
@@ -44,26 +43,8 @@ func setupPostgres(t *testing.T) (string, func()) {
 	}
 
 	return dsn, func() {
-		container.Terminate(ctx)
+		_ = container.Terminate(ctx)
 	}
-}
-
-// setupRedis starts a throwaway Redis container.
-func setupRedis(t *testing.T) (string, func()) {
-	t.Helper()
-	ctx := context.Background()
-
-	container, err := redis.RunContainer(ctx, testcontainers.WithImage("redis:7-alpine"))
-	if err != nil {
-		t.Skipf("testcontainers not available: %v", err)
-	}
-
-	url, err := container.ConnectionString(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return "redis://" + url, func() { container.Terminate(ctx) }
 }
 
 func setupServer(t *testing.T, store database.Store) *httptest.Server {
