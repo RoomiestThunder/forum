@@ -10,8 +10,6 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
-	Session  SessionConfig
-	UI       UIConfig
 	JWT      JWTConfig
 	Redis    RedisConfig
 	MinIO    MinIOConfig
@@ -35,21 +33,6 @@ type DatabaseConfig struct {
 	MaxOpenConn int
 	MaxIdleConn int
 	ConnMaxLife time.Duration
-}
-
-type SessionConfig struct {
-	DurationHours  int
-	CookieName     string
-	CookiePath     string
-	CookieSameSite string
-	HttpOnly       bool
-	Secure         bool
-}
-
-type UIConfig struct {
-	PaginationSize int
-	TitleMaxLen    int
-	CommentMaxLen  int
 }
 
 type JWTConfig struct {
@@ -104,19 +87,6 @@ func LoadConfig() *Config {
 			MaxIdleConn: getEnvInt("DB_MAX_IDLE_CONN", 5),
 			ConnMaxLife: time.Duration(getEnvInt("DB_CONN_MAX_LIFE_MINS", 5)) * time.Minute,
 		},
-		Session: SessionConfig{
-			DurationHours:  getEnvInt("SESSION_DURATION_HOURS", 24),
-			CookieName:     getEnv("COOKIE_NAME", "session"),
-			CookiePath:     getEnv("COOKIE_PATH", "/"),
-			CookieSameSite: getEnv("COOKIE_SAMESITE", "Lax"),
-			HttpOnly:       getEnvBool("COOKIE_HTTPONLY", true),
-			Secure:         getEnvBool("COOKIE_SECURE", false),
-		},
-		UI: UIConfig{
-			PaginationSize: getEnvInt("PAGINATION_SIZE", 5),
-			TitleMaxLen:    getEnvInt("POST_TITLE_MAX_LEN", 20),
-			CommentMaxLen:  getEnvInt("COMMENT_MAX_LEN", 500),
-		},
 		JWT: JWTConfig{
 			Secret:               getEnv("JWT_SECRET", "change-me-in-production"),
 			AccessTokenDuration:  time.Duration(getEnvInt("JWT_ACCESS_DURATION_MIN", 15)) * time.Minute,
@@ -161,15 +131,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Database.MaxIdleConn < 0 {
 		return fmt.Errorf("database max idle connections cannot be negative")
-	}
-	if c.UI.PaginationSize < 1 {
-		return fmt.Errorf("pagination size must be at least 1")
-	}
-	if c.UI.TitleMaxLen < 1 {
-		return fmt.Errorf("title max length must be at least 1")
-	}
-	if c.UI.CommentMaxLen < 1 {
-		return fmt.Errorf("comment max length must be at least 1")
 	}
 	return nil
 }

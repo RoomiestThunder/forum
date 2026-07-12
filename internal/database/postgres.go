@@ -748,43 +748,6 @@ func (s *PostgresStore) deleteComment(id int, whereClause string, whereArgs ...i
 	return nil
 }
 
-// ---- Session operations ----
-
-func (s *PostgresStore) CreateSession(userID int, uuid string) error {
-	_, err := s.db.Exec(
-		"INSERT INTO sessions (user_id, uuid, expires) VALUES ($1, $2, $3)",
-		userID, uuid, time.Now().Add(24*time.Hour),
-	)
-	return err
-}
-
-func (s *PostgresStore) GetSessionUserID(uuid string) (int, error) {
-	var userID int
-	var expires time.Time
-	err := s.db.QueryRow("SELECT user_id, expires FROM sessions WHERE uuid = $1", uuid).Scan(&userID, &expires)
-	if err == sql.ErrNoRows {
-		return 0, apperrors.NotFoundError("Session")
-	}
-	if err != nil {
-		return 0, apperrors.DatabaseError(err)
-	}
-	if time.Now().After(expires) {
-		_ = s.DeleteSession(uuid)
-		return 0, apperrors.NotFoundError("Session (expired)")
-	}
-	return userID, nil
-}
-
-func (s *PostgresStore) DeleteSession(uuid string) error {
-	_, err := s.db.Exec("DELETE FROM sessions WHERE uuid = $1", uuid)
-	return err
-}
-
-func (s *PostgresStore) DeleteSessionsByUser(userID int) error {
-	_, err := s.db.Exec("DELETE FROM sessions WHERE user_id = $1", userID)
-	return err
-}
-
 // ---- Refresh token operations ----
 
 func (s *PostgresStore) CreateRefreshToken(userID int, token string) error {

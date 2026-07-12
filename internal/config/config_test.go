@@ -16,14 +16,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Database.MaxOpenConn != 25 {
 		t.Errorf("Expected default max connections 25, got %d", cfg.Database.MaxOpenConn)
 	}
-
-	if cfg.Session.DurationHours != 24 {
-		t.Errorf("Expected default session duration 24, got %d", cfg.Session.DurationHours)
-	}
-
-	if cfg.UI.PaginationSize != 5 {
-		t.Errorf("Expected default pagination size 5, got %d", cfg.UI.PaginationSize)
-	}
 }
 
 func TestValidateConfigValid(t *testing.T) {
@@ -72,18 +64,6 @@ func TestValidateConfigInvalidMaxConnections(t *testing.T) {
 	}
 }
 
-func TestValidateConfigInvalidPaginationSize(t *testing.T) {
-	os.Clearenv()
-	_ = os.Setenv("PAGINATION_SIZE", "0")
-
-	cfg := LoadConfig()
-	err := cfg.Validate()
-
-	if err == nil {
-		t.Error("Expected validation error for pagination size 0, got nil")
-	}
-}
-
 func TestGetEnvWithDefault(t *testing.T) {
 	os.Clearenv()
 
@@ -111,23 +91,6 @@ func TestGetEnvIntWithDefault(t *testing.T) {
 	result = getEnvInt("NONEXISTENT_INT", 77)
 	if result != 77 {
 		t.Errorf("Expected default value 77, got %d", result)
-	}
-}
-
-func TestConfigCookieSecurity(t *testing.T) {
-	os.Clearenv()
-	cfg := LoadConfig()
-
-	if !cfg.Session.HttpOnly {
-		t.Error("Expected HttpOnly to be true by default")
-	}
-
-	if cfg.Session.CookieSameSite == "" {
-		t.Error("Expected CookieSameSite to be set")
-	}
-
-	if cfg.Session.CookieName == "" {
-		t.Error("Expected CookieName to be set")
 	}
 }
 

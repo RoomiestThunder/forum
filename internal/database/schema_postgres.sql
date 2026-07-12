@@ -65,13 +65,6 @@ CREATE TABLE IF NOT EXISTS comment_likes (
     UNIQUE (comment_id, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-    id      SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id),
-    uuid    TEXT UNIQUE,
-    expires TIMESTAMPTZ
-);
-
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id         SERIAL PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(id),

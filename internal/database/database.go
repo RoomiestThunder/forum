@@ -74,12 +74,6 @@ type Store interface {
 	UpdateComment(id, userID int, content string) error
 	DeleteComment(id, userID int) error
 
-	// Session operations
-	CreateSession(userID int, uuid string) error
-	GetSessionUserID(uuid string) (int, error)
-	DeleteSession(uuid string) error
-	DeleteSessionsByUser(userID int) error
-
 	// Refresh token operations
 	CreateRefreshToken(userID int, token string) error
 	GetRefreshToken(token string) (*models.RefreshToken, error)

@@ -108,13 +108,6 @@ func sqliteSchema(db *sql.DB) error {
 		FOREIGN KEY(comment_id) REFERENCES comments(id),
 		FOREIGN KEY(user_id) REFERENCES users(id)
 	);
-	CREATE TABLE IF NOT EXISTS sessions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id INTEGER,
-		uuid TEXT UNIQUE,
-		expires DATETIME,
-		FOREIGN KEY(user_id) REFERENCES users(id)
-	);
 	CREATE TABLE IF NOT EXISTS refresh_tokens (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id INTEGER NOT NULL,
@@ -922,40 +915,6 @@ func (s *SQLiteStore) deleteComment(id int, whereClause string, whereArgs ...int
 		return apperrors.PermissionError("delete comment")
 	}
 	return nil
-}
-
-// ---- Session operations ----
-
-func (s *SQLiteStore) CreateSession(userID int, uuid string) error {
-	_, err := s.db.Exec("INSERT INTO sessions (user_id, uuid, expires) VALUES (?, ?, ?)", userID, uuid, time.Now().Add(24*time.Hour))
-	return err
-}
-
-func (s *SQLiteStore) GetSessionUserID(uuid string) (int, error) {
-	var userID int
-	var expires time.Time
-	err := s.db.QueryRow("SELECT user_id, expires FROM sessions WHERE uuid = ?", uuid).Scan(&userID, &expires)
-	if err == sql.ErrNoRows {
-		return 0, apperrors.NotFoundError("Session")
-	}
-	if err != nil {
-		return 0, apperrors.DatabaseError(err)
-	}
-	if time.Now().After(expires) {
-		_ = s.DeleteSession(uuid)
-		return 0, apperrors.NotFoundError("Session (expired)")
-	}
-	return userID, nil
-}
-
-func (s *SQLiteStore) DeleteSession(uuid string) error {
-	_, err := s.db.Exec("DELETE FROM sessions WHERE uuid = ?", uuid)
-	return err
-}
-
-func (s *SQLiteStore) DeleteSessionsByUser(userID int) error {
-	_, err := s.db.Exec("DELETE FROM sessions WHERE user_id = ?", userID)
-	return err
 }
 
 // ---- Refresh token operations ----

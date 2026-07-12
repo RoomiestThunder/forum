@@ -63,13 +63,6 @@ type Comment struct {
 	Dislikes  int       `json:"dislikes"`
 }
 
-type Session struct {
-	ID      int       `json:"id"`
-	UserID  int       `json:"user_id"`
-	UUID    string    `json:"uuid"`
-	Expires time.Time `json:"expires"`
-}
-
 type RefreshToken struct {
 	ID        int       `json:"id"`
 	UserID    int       `json:"user_id"`
