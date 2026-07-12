@@ -5,15 +5,16 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { api, uploadFile } from './api'
-import type { Category, Comment, CurrentUser, Post, PublicProfile } from './types'
+import type { Category, Comment, CurrentUser, Post, PublicProfile, Tag } from './types'
 import { useAuth } from '../stores/auth'
 
 export const PAGE_SIZE = 10
 
 export interface FeedParams {
-  filter?: 'myposts' | 'liked'
+  filter?: 'myposts' | 'liked' | 'saved'
   category?: number
   author?: string
+  tag?: string
 }
 
 export function usePostsFeed(params: FeedParams) {
@@ -24,6 +25,7 @@ export function usePostsFeed(params: FeedParams) {
       if (params.filter) search.set('filter', params.filter)
       if (params.category) search.set('category', String(params.category))
       if (params.author) search.set('author', params.author)
+      if (params.tag) search.set('tag', params.tag)
       // The API returns null instead of [] for an empty page.
       return (await api<Post[] | null>(`/posts?${search}`)) ?? []
     },
@@ -37,7 +39,16 @@ export function usePost(id: number) {
   return useQuery({
     queryKey: ['post', id],
     queryFn: () =>
-      api<{ post: Post; comments: Comment[] | null }>(`/posts/${id}`),
+      api<{ post: Post; comments: Comment[] | null; is_bookmarked?: boolean }>(`/posts/${id}`),
+  })
+}
+
+export function useTagSuggestions(query: string) {
+  return useQuery({
+    queryKey: ['tags', query],
+    queryFn: () => api<Tag[] | null>(`/tags?q=${encodeURIComponent(query)}`),
+    enabled: query.length > 0,
+    staleTime: 30_000,
   })
 }
 
@@ -68,6 +79,7 @@ export function useCreatePost() {
       content: string
       category_ids: number[]
       image_url?: string
+      tags?: string[]
     }) => api<{ id: number }>('/posts', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => invalidate(),
   })
@@ -189,5 +201,20 @@ export function useUploadAvatar() {
 export function useUploadPostImage() {
   return useMutation({
     mutationFn: (file: File) => uploadFile<{ id: number; url: string }>('/upload', file),
+  })
+}
+
+export function useToggleBookmark(postId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (bookmarked: boolean) =>
+      api('/bookmarks', {
+        method: 'POST',
+        body: JSON.stringify({ post_id: postId, bookmarked }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['post', postId] })
+      void qc.invalidateQueries({ queryKey: ['posts'] })
+    },
   })
 }

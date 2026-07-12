@@ -8,6 +8,7 @@ const FILTERS = [
   { key: undefined, label: 'Latest' },
   { key: 'myposts', label: 'My posts' },
   { key: 'liked', label: 'Liked' },
+  { key: 'saved', label: 'Saved' },
 ] as const
 
 export default function Feed() {
@@ -16,10 +17,14 @@ export default function Feed() {
 
   const filterParam = searchParams.get('filter')
   const categoryParam = searchParams.get('category')
+  const tagParam = searchParams.get('tag')
 
   const params: FeedParams = {}
-  if (filterParam === 'myposts' || filterParam === 'liked') params.filter = filterParam
+  if (filterParam === 'myposts' || filterParam === 'liked' || filterParam === 'saved') {
+    params.filter = filterParam
+  }
   if (categoryParam) params.category = Number(categoryParam)
+  if (tagParam) params.tag = tagParam
 
   const feed = usePostsFeed(params)
   const { data: categories } = useCategories()
@@ -37,7 +42,7 @@ export default function Feed() {
                 key={label}
                 to={key ? `/?filter=${key}` : '/'}
                 className={`rounded-full px-3 py-1 text-sm font-medium transition ${
-                  active && !params.category
+                  active && !params.category && !params.tag
                     ? 'bg-indigo-600 text-white'
                     : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
                 }`}
@@ -59,6 +64,14 @@ export default function Feed() {
             {c.name}
           </Link>
         ))}
+        {params.tag && (
+          <span className="flex items-center gap-1.5 rounded-full bg-indigo-600 px-3 py-1 text-sm font-medium text-white">
+            #{params.tag}
+            <Link to="/" aria-label="Clear tag filter" className="hover:opacity-75">
+              ×
+            </Link>
+          </span>
+        )}
       </div>
 
       {feed.isLoading && (

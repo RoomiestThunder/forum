@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ImagePlus, Loader2, X } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
+import TagInput from '../components/TagInput'
 import {
   useCategories,
   useCreatePost,
@@ -18,6 +19,7 @@ export default function PostEditor() {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [selectedCategories, setSelectedCategories] = useState<number[]>([])
+  const [tags, setTags] = useState<string[]>([])
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -78,6 +80,7 @@ export default function PostEditor() {
           content: trimmedContent,
           category_ids: selectedCategories,
           image_url: imageUrl ?? undefined,
+          tags: tags.length > 0 ? tags : undefined,
         },
         { onSuccess: ({ id: newId }) => navigate(`/post/${newId}`) },
       )
@@ -146,6 +149,13 @@ export default function PostEditor() {
                 ))}
               </div>
             </fieldset>
+
+            <div>
+              <span className="mb-1 block text-sm font-medium">
+                Tags <span className="font-normal text-zinc-400">(up to 5, optional)</span>
+              </span>
+              <TagInput tags={tags} onChange={setTags} />
+            </div>
 
             <div>
               <span className="mb-1 block text-sm font-medium">

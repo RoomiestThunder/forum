@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, Pencil, Trash2 } from 'lucide-react'
+import { Bookmark, Loader2, Pencil, Trash2 } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link, useNavigate, useParams } from 'react-router'
@@ -9,6 +9,7 @@ import {
   useCreateComment,
   useDeletePost,
   usePost,
+  useToggleBookmark,
   useVotePost,
 } from '../lib/queries'
 import { fullDate, timeAgo } from '../lib/time'
@@ -26,6 +27,7 @@ export default function PostDetail() {
   const vote = useVotePost()
   const deletePost = useDeletePost()
   const createComment = useCreateComment(postId)
+  const toggleBookmark = useToggleBookmark(postId)
 
   const [commentDraft, setCommentDraft] = useState('')
 
@@ -115,13 +117,43 @@ export default function PostDetail() {
           <Markdown remarkPlugins={[remarkGfm]}>{post.content}</Markdown>
         </div>
 
-        <div className="mt-4">
+        {post.tags && post.tags.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {post.tags.map((t) => (
+              <Link
+                key={t.id}
+                to={`/?tag=${t.name}`}
+                className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                #{t.name}
+              </Link>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex items-center gap-3">
           <VoteButtons
             likes={post.likes}
             dislikes={post.dislikes}
             onVote={(isLike) => vote.mutate({ postId: post.id, isLike })}
             disabled={vote.isPending}
           />
+          {loggedIn && (
+            <button
+              type="button"
+              onClick={() => toggleBookmark.mutate(!data.is_bookmarked)}
+              disabled={toggleBookmark.isPending}
+              aria-pressed={data.is_bookmarked}
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm transition disabled:opacity-50 ${
+                data.is_bookmarked
+                  ? 'text-indigo-600 dark:text-indigo-400'
+                  : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100'
+              }`}
+            >
+              <Bookmark size={15} fill={data.is_bookmarked ? 'currentColor' : 'none'} />
+              {data.is_bookmarked ? 'Saved' : 'Save'}
+            </button>
+          )}
         </div>
       </article>
 

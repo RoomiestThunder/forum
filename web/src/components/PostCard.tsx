@@ -41,6 +41,19 @@ export default function PostCard({ post }: { post: Post }) {
           />
         </Link>
       )}
+      {post.tags && post.tags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {post.tags.map((t) => (
+            <Link
+              key={t.id}
+              to={`/?tag=${t.name}`}
+              className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              #{t.name}
+            </Link>
+          ))}
+        </div>
+      )}
       <div className="mt-3 flex items-center gap-3">
         <VoteButtons
           likes={post.likes}

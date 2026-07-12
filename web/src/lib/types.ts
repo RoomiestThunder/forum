@@ -3,6 +3,11 @@ export interface Category {
   name: string
 }
 
+export interface Tag {
+  id: number
+  name: string
+}
+
 export interface Post {
   id: number
   user_id: number
@@ -13,6 +18,7 @@ export interface Post {
   likes: number
   dislikes: number
   categories: Category[] | null
+  tags: Tag[] | null
   comment_count: number
   image_url?: string
 }
