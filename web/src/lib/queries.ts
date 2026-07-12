@@ -1,0 +1,141 @@
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
+import { api } from './api'
+import type { Category, Comment, Post } from './types'
+
+export const PAGE_SIZE = 10
+
+export interface FeedParams {
+  filter?: 'myposts' | 'liked'
+  category?: number
+}
+
+export function usePostsFeed(params: FeedParams) {
+  return useInfiniteQuery({
+    queryKey: ['posts', params],
+    queryFn: async ({ pageParam }) => {
+      const search = new URLSearchParams({ page: String(pageParam) })
+      if (params.filter) search.set('filter', params.filter)
+      if (params.category) search.set('category', String(params.category))
+      // The API returns null instead of [] for an empty page.
+      return (await api<Post[] | null>(`/posts?${search}`)) ?? []
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage, _all, lastPageParam) =>
+      lastPage.length === PAGE_SIZE ? lastPageParam + 1 : undefined,
+  })
+}
+
+export function usePost(id: number) {
+  return useQuery({
+    queryKey: ['post', id],
+    queryFn: () =>
+      api<{ post: Post; comments: Comment[] | null }>(`/posts/${id}`),
+  })
+}
+
+export function useCategories() {
+  return useQuery({
+    queryKey: ['categories'],
+    queryFn: () => api<Category[]>('/categories'),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** Invalidate every posts-related cache after a write. */
+function useInvalidatePosts() {
+  const qc = useQueryClient()
+  return (postId?: number) => {
+    void qc.invalidateQueries({ queryKey: ['posts'] })
+    if (postId !== undefined) {
+      void qc.invalidateQueries({ queryKey: ['post', postId] })
+    }
+  }
+}
+
+export function useCreatePost() {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (body: { title: string; content: string; category_ids: number[] }) =>
+      api<{ id: number }>('/posts', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => invalidate(),
+  })
+}
+
+export function useUpdatePost(id: number) {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (body: { title: string; content: string }) =>
+      api(`/posts/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    onSuccess: () => invalidate(id),
+  })
+}
+
+export function useDeletePost() {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (id: number) => api(`/posts/${id}`, { method: 'DELETE' }),
+    onSuccess: () => invalidate(),
+  })
+}
+
+export function useVotePost() {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: ({ postId, isLike }: { postId: number; isLike: boolean }) =>
+      api('/like/post', {
+        method: 'POST',
+        body: JSON.stringify({ post_id: postId, is_like: isLike }),
+      }),
+    onSuccess: (_data, { postId }) => invalidate(postId),
+  })
+}
+
+export function useVoteComment(postId: number) {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: ({ commentId, isLike }: { commentId: number; isLike: boolean }) =>
+      api('/like/comment', {
+        method: 'POST',
+        body: JSON.stringify({ comment_id: commentId, is_like: isLike }),
+      }),
+    onSuccess: () => invalidate(postId),
+  })
+}
+
+export function useCreateComment(postId: number) {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (content: string) =>
+      api<{ id: number }>(`/posts/${postId}`, {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      }),
+    onSuccess: () => invalidate(postId),
+  })
+}
+
+export function useUpdateComment(postId: number) {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: ({ commentId, content }: { commentId: number; content: string }) =>
+      api(`/comments/${commentId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ content }),
+      }),
+    onSuccess: () => invalidate(postId),
+  })
+}
+
+export function useDeleteComment(postId: number) {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (commentId: number) =>
+      api(`/comments/${commentId}`, { method: 'DELETE' }),
+    onSuccess: () => invalidate(postId),
+  })
+}

@@ -1,0 +1,159 @@
+import { useEffect, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { useNavigate, useParams } from 'react-router'
+import {
+  useCategories,
+  useCreatePost,
+  usePost,
+  useUpdatePost,
+} from '../lib/queries'
+
+export default function PostEditor() {
+  const { id } = useParams()
+  const postId = id ? Number(id) : undefined
+  const isEdit = postId !== undefined
+  const navigate = useNavigate()
+
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+  const [selectedCategories, setSelectedCategories] = useState<number[]>([])
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  const { data: categories } = useCategories()
+  const existing = usePost(postId ?? 0)
+  const create = useCreatePost()
+  const update = useUpdatePost(postId ?? 0)
+
+  // Prefill the form when editing.
+  useEffect(() => {
+    if (isEdit && existing.data) {
+      setTitle(existing.data.post.title)
+      setContent(existing.data.post.content)
+      setSelectedCategories(existing.data.post.categories?.map((c) => c.id) ?? [])
+    }
+  }, [isEdit, existing.data])
+
+  if (isEdit && existing.isLoading) {
+    return (
+      <div className="flex justify-center py-16">
+        <Loader2 className="animate-spin text-zinc-400" />
+      </div>
+    )
+  }
+
+  const toggleCategory = (categoryId: number) => {
+    setSelectedCategories((prev) =>
+      prev.includes(categoryId) ? prev.filter((c) => c !== categoryId) : [...prev, categoryId],
+    )
+  }
+
+  const mutation = isEdit ? update : create
+
+  const submit = () => {
+    const trimmedTitle = title.trim()
+    const trimmedContent = content.trim()
+    if (!trimmedTitle || !trimmedContent) {
+      setValidationError('Title and content are required.')
+      return
+    }
+    if (!isEdit && selectedCategories.length === 0) {
+      setValidationError('Pick at least one category.')
+      return
+    }
+    setValidationError(null)
+
+    if (isEdit) {
+      update.mutate(
+        { title: trimmedTitle, content: trimmedContent },
+        { onSuccess: () => navigate(`/post/${postId}`) },
+      )
+    } else {
+      create.mutate(
+        { title: trimmedTitle, content: trimmedContent, category_ids: selectedCategories },
+        { onSuccess: ({ id: newId }) => navigate(`/post/${newId}`) },
+      )
+    }
+  }
+
+  const error = validationError ?? (mutation.isError ? mutation.error.message : null)
+
+  return (
+    <div className="mx-auto max-w-2xl">
+      <h1 className="text-2xl font-bold">{isEdit ? 'Edit post' : 'New post'}</h1>
+      <form
+        className="mt-6 space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+      >
+        {error && (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
+            {error}
+          </p>
+        )}
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">Title</span>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={100}
+            required
+            autoFocus={!isEdit}
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium">
+            Content <span className="font-normal text-zinc-400">(markdown supported)</span>
+          </span>
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            rows={10}
+            required
+            className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"
+          />
+        </label>
+        {!isEdit && (
+          <fieldset>
+            <legend className="mb-1 text-sm font-medium">Categories</legend>
+            <div className="flex flex-wrap gap-2">
+              {(categories ?? []).map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => toggleCategory(c.id)}
+                  className={`rounded-full px-3 py-1 text-sm font-medium transition ${
+                    selectedCategories.includes(c.id)
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        )}
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={mutation.isPending}
+            className="rounded-lg bg-indigo-600 px-4 py-2 font-medium text-white transition hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {mutation.isPending ? 'Saving…' : isEdit ? 'Save changes' : 'Publish'}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="rounded-lg px-4 py-2 font-medium text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
