@@ -3,8 +3,8 @@
 /forum.exe
 /forum.dll
 
-# Build output
-dist/
+# Build output (web/dist is handled by web/.gitignore, which keeps a
+# .gitkeep placeholder so `go build` works without a frontend build first)
 build/
 *.o
 *.a

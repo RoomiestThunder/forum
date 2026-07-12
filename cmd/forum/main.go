@@ -19,7 +19,6 @@ import (
 	"forum/internal/cache"
 	"forum/internal/config"
 	"forum/internal/database"
-	"forum/internal/handlers"
 	"forum/internal/metrics"
 	appmw "forum/internal/middleware"
 	"forum/internal/storage"
@@ -108,10 +107,14 @@ func main() {
 	apiServer := api.NewServer(store, jwtManager, redisCache, storageClient, hub)
 	apiServer.Mount(root)
 
-	// HTML handlers (handles /, /post/*, /login, etc.)
+	// Everything else is the React SPA (embedded build of web/dist).
+	spaHandler, err := newSPAHandler()
+	if err != nil {
+		log.Fatalf("spa: %v", err)
+	}
 	root.Group(func(r chi.Router) {
 		r.Use(metrics.Middleware)
-		handlers.RegisterRoutes(r, store)
+		r.Handle("/*", spaHandler)
 	})
 
 	srv := &http.Server{
