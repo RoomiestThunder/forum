@@ -14,6 +14,7 @@ import (
 	"forum/internal/config"
 	"forum/internal/database"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -52,11 +53,11 @@ func setupServer(t *testing.T, store database.Store) *httptest.Server {
 	cfg := config.LoadConfig()
 	jwtManager := auth.NewManager(cfg.JWT.Secret, cfg.JWT.AccessTokenDuration, cfg.JWT.RefreshTokenDuration)
 
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
 	apiServer := api.NewServer(store, jwtManager, nil, nil, nil)
-	apiServer.Mount(mux)
+	apiServer.Mount(r)
 
-	return httptest.NewServer(mux)
+	return httptest.NewServer(r)
 }
 
 // TestIntegration_RegisterLoginPosts runs the full CRUD flow against a real PostgreSQL container.

@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"forum/internal/models"
 	tmplfs "forum/templates"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -58,90 +60,59 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	},
 }).ParseFS(tmplfs.FS, "*.html"))
 
-// RegisterRoutes mounts all HTML routes onto mux.
-func RegisterRoutes(mux *http.ServeMux, st database.Store) {
+// RegisterRoutes mounts all HTML routes onto r.
+func RegisterRoutes(r chi.Router, st database.Store) {
 	store = st
 
+	r.NotFound(render404)
+	r.MethodNotAllowed(render405)
+
 	// Static files
-	mux.HandleFunc("/static/css/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/static/css/" {
-			http.NotFound(w, r)
-			return
-		}
+	r.Get("/static/css/*", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "static/css"+strings.TrimPrefix(r.URL.Path, "/static/css"))
 	})
-	mux.HandleFunc("/static/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/static/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "static/favicon.ico")
 	})
-	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/static/css/") || r.URL.Path == "/static/favicon.ico" {
-			return
-		}
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte("403 Forbidden"))
-	})
-	mux.HandleFunc("/templates/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte("403 Forbidden"))
-	})
+	r.Get("/static/*", forbidden)
+	r.Get("/templates/*", forbidden)
 
-	mux.HandleFunc("/post/", methodGate([]string{http.MethodGet, http.MethodPost}, postDetailHandler))
-	mux.HandleFunc("/edit_comment", editCommentHandler)
-	mux.HandleFunc("/delete_comment", deleteCommentHandler)
-	mux.HandleFunc("/like_comment", methodGate([]string{http.MethodGet}, likeCommentHandler))
+	r.Get("/", homeHandler)
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Don't intercept /api/* routes
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/metrics" {
-			http.NotFound(w, r)
-			return
-		}
-		switch r.URL.Path {
-		case "/":
-			methodGate([]string{http.MethodGet}, homeHandler)(w, r)
-		case "/register":
-			methodGate([]string{http.MethodGet, http.MethodPost}, registerHandler)(w, r)
-		case "/login":
-			methodGate([]string{http.MethodGet, http.MethodPost}, loginHandler)(w, r)
-		case "/logout":
-			methodGate([]string{http.MethodGet}, logoutHandler)(w, r)
-		case "/create_post":
-			methodGate([]string{http.MethodGet, http.MethodPost}, createPostHandler)(w, r)
-		case "/like_post":
-			methodGate([]string{http.MethodGet}, likePostHandler)(w, r)
-		case "/edit_post":
-			editPostHandler(w, r)
-		case "/delete_post":
-			deletePostHandler(w, r)
-		default:
-			render404(w, r)
-		}
-	})
+	r.Get("/register", registerHandler)
+	r.Post("/register", registerHandler)
+	r.Get("/login", loginHandler)
+	r.Post("/login", loginHandler)
+	r.Get("/logout", logoutHandler)
+
+	r.Get("/create_post", createPostHandler)
+	r.Post("/create_post", createPostHandler)
+
+	r.Get("/like_post", likePostHandler)
+
+	r.Get("/edit_post", editPostHandler)
+	r.Post("/edit_post", editPostHandler)
+	r.Put("/edit_post", editPostHandler)
+
+	r.Post("/delete_post", deletePostHandler)
+	r.Delete("/delete_post", deletePostHandler)
+
+	r.Get("/post/{id}", postDetailHandler)
+	r.Post("/post/{id}", postDetailHandler)
+
+	r.Get("/edit_comment", editCommentHandler)
+	r.Post("/edit_comment", editCommentHandler)
+	r.Put("/edit_comment", editCommentHandler)
+
+	r.Post("/delete_comment", deleteCommentHandler)
+	r.Delete("/delete_comment", deleteCommentHandler)
+
+	r.Get("/like_comment", likeCommentHandler)
 }
 
-// methodGate wraps a handler with method checking.
-func methodGate(methods []string, h http.HandlerFunc) http.HandlerFunc {
-	allowed := make(map[string]bool)
-	for _, m := range methods {
-		allowed[m] = true
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Allow POST with _method override
-		if r.Method == http.MethodPost {
-			r.ParseForm()
-			if m := r.FormValue("_method"); m != "" {
-				if allowed[m] {
-					h(w, r)
-					return
-				}
-			}
-		}
-		if !allowed[r.Method] {
-			render405(w, r)
-			return
-		}
-		h(w, r)
-	}
+func forbidden(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte("403 Forbidden"))
 }
 
 func Render400(w http.ResponseWriter, message string) {
@@ -254,13 +225,11 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func postDetailHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := r.URL.Path[len("/post/"):]
-	if idStr == "" {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
 		render404(w, r)
 		return
 	}
-	var id int
-	fmt.Sscanf(idStr, "%d", &id)
 
 	user := GetCurrentUser(r)
 
@@ -302,7 +271,6 @@ func postDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	templates.ExecuteTemplate(w, "post_detail.html", data)
 }
-
 
 func editPostHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
@@ -409,10 +377,6 @@ func editCommentHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch method {
 	case http.MethodGet:
-		comments, _ := store.GetCommentsByPostID(0) // we need a single comment getter
-		_ = comments
-		// Use a simple approach: get from post comments
-		// For edit page we just show the form
 		templates.ExecuteTemplate(w, "edit_comment.html", map[string]interface{}{
 			"ID": commentIDStr, "PostID": postIDStr, "Content": r.FormValue("content"),
 		})

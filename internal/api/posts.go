@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +65,7 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getPost(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDFromPath(r.URL.Path, "/api/v1/posts/")
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid post id", http.StatusBadRequest)
 		return
@@ -114,7 +116,7 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updatePost(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDFromPath(r.URL.Path, "/api/v1/posts/")
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid post id", http.StatusBadRequest)
 		return
@@ -143,7 +145,7 @@ func (s *Server) updatePost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDFromPath(r.URL.Path, "/api/v1/posts/")
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid post id", http.StatusBadRequest)
 		return
@@ -164,7 +166,7 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
-	postID, err := parseIDFromPath(r.URL.Path, "/api/v1/posts/")
+	postID, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
 		jsonError(w, "invalid post id", http.StatusBadRequest)
 		return
@@ -280,11 +282,4 @@ func (s *Server) listCategories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, cats, http.StatusOK)
-}
-
-func parseIDFromPath(path, prefix string) (int, error) {
-	trimmed := strings.TrimPrefix(path, prefix)
-	// Handle nested paths like /api/v1/posts/5/comments
-	parts := strings.Split(trimmed, "/")
-	return strconv.Atoi(parts[0])
 }

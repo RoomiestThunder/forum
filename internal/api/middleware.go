@@ -14,8 +14,8 @@ type contextKey string
 const ctxUserID contextKey = "api_user_id"
 
 // requireAuth extracts and validates the JWT Bearer token.
-func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {
 			jsonError(w, "authorization header required", http.StatusUnauthorized)
@@ -28,8 +28,8 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxUserID, claims.UserID)
-		next(w, r.WithContext(ctx))
-	}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func userIDFromCtx(r *http.Request) int {

@@ -3,10 +3,13 @@ package api
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"forum/internal/auth"
 	"forum/internal/cache"
 	"forum/internal/database"
 	"forum/internal/metrics"
+	appmw "forum/internal/middleware"
 	"forum/internal/storage"
 	ws "forum/internal/websocket"
 )
@@ -17,6 +20,10 @@ type Server struct {
 	cache   *cache.Cache
 	storage *storage.Client
 	hub     *ws.Hub
+
+	// rateLimiter is used only when Redis is unavailable, so basic abuse
+	// protection still holds even in cache-degraded mode.
+	rateLimiter *appmw.RateLimiter
 }
 
 func NewServer(
@@ -26,92 +33,84 @@ func NewServer(
 	storageClient *storage.Client,
 	hub *ws.Hub,
 ) *Server {
-	return &Server{
+	s := &Server{
 		store:   store,
 		jwt:     jwt,
 		cache:   redisCache,
 		storage: storageClient,
 		hub:     hub,
 	}
+	if redisCache == nil {
+		s.rateLimiter = appmw.NewRateLimiter(1, 60) // ~60 req/min per IP, matches the Redis limit
+	}
+	return s
 }
 
-// Mount registers all /api/v1/* routes onto the given mux.
-func (s *Server) Mount(mux *http.ServeMux) {
-	mux.Handle("/api/v1/", metrics.Middleware(http.HandlerFunc(s.route)))
-	mux.Handle("/api/v1/ws", http.HandlerFunc(s.handleWS))
+// Mount registers /api/v1/* (including the websocket upgrade) onto root.
+func (s *Server) Mount(root chi.Router) {
+	// The websocket upgrade is a long-lived connection, not a request/response
+	// cycle, so it stays out of the HTTP metrics histogram and rate limiter.
+	root.Get("/api/v1/ws", s.handleWS)
+
+	root.Route("/api/v1", func(r chi.Router) {
+		r.Use(metrics.Middleware)
+		r.Use(s.rateLimit)
+		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+			jsonError(w, "not found", http.StatusNotFound)
+		})
+		r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+			jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		})
+
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/register", s.register)
+			r.Post("/login", s.login)
+			r.Post("/refresh", s.refreshToken)
+			r.With(s.requireAuth).Post("/logout", s.logout)
+		})
+
+		r.Route("/posts", func(r chi.Router) {
+			r.Get("/", s.listPosts)
+			r.With(s.requireAuth).Post("/", s.createPost)
+			r.Get("/{id}", s.getPost)
+			r.With(s.requireAuth).Put("/{id}", s.updatePost)
+			r.With(s.requireAuth).Delete("/{id}", s.deletePost)
+			r.With(s.requireAuth).Post("/{id}", s.createComment)
+		})
+
+		r.Route("/like", func(r chi.Router) {
+			r.With(s.requireAuth).Post("/post", s.likePost)
+			r.With(s.requireAuth).Post("/comment", s.likeComment)
+		})
+
+		r.Get("/search", s.search)
+		r.With(s.requireAuth).Post("/upload", s.upload)
+		r.Get("/categories", s.listCategories)
+		r.Get("/health", s.health)
+	})
 }
 
-func (s *Server) route(w http.ResponseWriter, r *http.Request) {
-	// Apply Redis rate limiting to all API routes
-	if s.cache != nil {
+// rateLimit applies Redis-backed rate limiting when available, falling back
+// to an in-memory token bucket per IP otherwise.
+func (s *Server) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr
-		allowed, err := s.cache.AllowRequest(r.Context(), ip)
-		if err == nil && !allowed {
-			jsonError(w, "too many requests", http.StatusTooManyRequests)
-			return
+		switch {
+		case s.cache != nil:
+			if allowed, err := s.cache.AllowRequest(r.Context(), ip); err == nil && !allowed {
+				jsonError(w, "too many requests", http.StatusTooManyRequests)
+				return
+			}
+		case s.rateLimiter != nil:
+			if !s.rateLimiter.Allow(ip) {
+				jsonError(w, "too many requests", http.StatusTooManyRequests)
+				return
+			}
 		}
-	}
-
-	path := r.URL.Path
-	switch {
-	// Auth
-	case path == "/api/v1/auth/register" && r.Method == http.MethodPost:
-		s.register(w, r)
-	case path == "/api/v1/auth/login" && r.Method == http.MethodPost:
-		s.login(w, r)
-	case path == "/api/v1/auth/refresh" && r.Method == http.MethodPost:
-		s.refreshToken(w, r)
-	case path == "/api/v1/auth/logout" && r.Method == http.MethodPost:
-		s.requireAuth(s.logout)(w, r)
-
-	// Posts
-	case path == "/api/v1/posts" && r.Method == http.MethodGet:
-		s.listPosts(w, r)
-	case path == "/api/v1/posts" && r.Method == http.MethodPost:
-		s.requireAuth(s.createPost)(w, r)
-	case matchPath(path, "/api/v1/posts/") && r.Method == http.MethodGet:
-		s.getPost(w, r)
-	case matchPath(path, "/api/v1/posts/") && r.Method == http.MethodPut:
-		s.requireAuth(s.updatePost)(w, r)
-	case matchPath(path, "/api/v1/posts/") && r.Method == http.MethodDelete:
-		s.requireAuth(s.deletePost)(w, r)
-
-	// Comments
-	case matchPath(path, "/api/v1/posts/") && r.Method == http.MethodPost:
-		s.requireAuth(s.createComment)(w, r)
-
-	// Likes
-	case path == "/api/v1/like/post" && r.Method == http.MethodPost:
-		s.requireAuth(s.likePost)(w, r)
-	case path == "/api/v1/like/comment" && r.Method == http.MethodPost:
-		s.requireAuth(s.likeComment)(w, r)
-
-	// Search
-	case path == "/api/v1/search" && r.Method == http.MethodGet:
-		s.search(w, r)
-
-	// Upload
-	case path == "/api/v1/upload" && r.Method == http.MethodPost:
-		s.requireAuth(s.upload)(w, r)
-
-	// Categories
-	case path == "/api/v1/categories" && r.Method == http.MethodGet:
-		s.listCategories(w, r)
-
-	// Health
-	case path == "/api/v1/health" && r.Method == http.MethodGet:
-		s.health(w, r)
-
-	default:
-		jsonError(w, "not found", http.StatusNotFound)
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
-}
-
-// matchPath returns true if path starts with the given prefix (and has more content after it).
-func matchPath(path, prefix string) bool {
-	return len(path) > len(prefix) && path[:len(prefix)] == prefix
 }

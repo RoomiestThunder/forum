@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
+
 	"forum/internal/api"
 	"forum/internal/auth"
 	"forum/internal/cache"
@@ -18,6 +21,7 @@ import (
 	"forum/internal/database"
 	"forum/internal/handlers"
 	"forum/internal/metrics"
+	appmw "forum/internal/middleware"
 	"forum/internal/storage"
 	ws "forum/internal/websocket"
 )
@@ -91,22 +95,28 @@ func main() {
 	defer cancel()
 	go hub.Run(ctx)
 
-	// ---- HTTP mux ----
-	mux := http.NewServeMux()
+	// ---- HTTP router ----
+	root := chi.NewRouter()
+	root.Use(chimw.RealIP)
+	root.Use(chimw.Recoverer)
+	root.Use(appmw.SecurityHeaders)
 
 	// Prometheus metrics endpoint
-	mux.Handle("/metrics", metrics.Handler())
+	root.Handle("/metrics", metrics.Handler())
 
-	// REST API v1 (handles /api/v1/*)
+	// REST API v1 (handles /api/v1/*, including the websocket upgrade)
 	apiServer := api.NewServer(store, jwtManager, redisCache, storageClient, hub)
-	apiServer.Mount(mux)
+	apiServer.Mount(root)
 
 	// HTML handlers (handles /, /post/*, /login, etc.)
-	handlers.RegisterRoutes(mux, store)
+	root.Group(func(r chi.Router) {
+		r.Use(metrics.Middleware)
+		handlers.RegisterRoutes(r, store)
+	})
 
 	srv := &http.Server{
 		Addr:         cfg.GetServerAddr(),
-		Handler:      metrics.Middleware(mux),
+		Handler:      root,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
