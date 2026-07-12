@@ -356,3 +356,36 @@ export function useAdminDeleteComment(postId: number) {
     onSuccess: () => invalidate(postId),
   })
 }
+
+export function useAuthProviders() {
+  return useQuery({
+    queryKey: ['auth-providers'],
+    queryFn: () => api<{ github: boolean }>('/auth/providers'),
+    staleTime: Infinity,
+  })
+}
+
+export function useForgotPassword() {
+  return useMutation({
+    mutationFn: (email: string) => api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+  })
+}
+
+export function useResetPassword() {
+  return useMutation({
+    mutationFn: (body: { token: string; new_password: string }) =>
+      api('/auth/reset-password', { method: 'POST', body: JSON.stringify(body) }),
+  })
+}
+
+export function useVerifyEmail() {
+  return useMutation({
+    mutationFn: (token: string) => api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
+  })
+}
+
+export function useResendVerification() {
+  return useMutation({
+    mutationFn: () => api('/auth/resend-verification', { method: 'POST' }),
+  })
+}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, MailWarning } from 'lucide-react'
 import { useNavigate } from 'react-router'
-import { useMe, useUpdateBio, useUploadAvatar } from '../lib/queries'
+import { useMe, useResendVerification, useUpdateBio, useUploadAvatar } from '../lib/queries'
 import { useAuth } from '../stores/auth'
 
 export default function Settings() {
@@ -10,6 +10,7 @@ export default function Settings() {
   const { data: me, isLoading } = useMe()
   const updateBio = useUpdateBio()
   const uploadAvatar = useUploadAvatar()
+  const resendVerification = useResendVerification()
   const fileInput = useRef<HTMLInputElement>(null)
 
   const [bio, setBio] = useState('')
@@ -31,6 +32,27 @@ export default function Settings() {
   return (
     <div className="mx-auto max-w-lg">
       <h1 className="text-2xl font-bold">Profile settings</h1>
+
+      {!me.email_verified && (
+        <div className="mt-4 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          <MailWarning size={16} className="mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p>Your email address isn't verified yet.</p>
+            {resendVerification.isSuccess ? (
+              <p className="mt-1 text-xs">Verification email sent - check your inbox.</p>
+            ) : (
+              <button
+                type="button"
+                onClick={() => resendVerification.mutate()}
+                disabled={resendVerification.isPending}
+                className="mt-1 text-xs font-medium underline decoration-dotted disabled:opacity-50"
+              >
+                {resendVerification.isPending ? 'Sending…' : 'Resend verification email'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 flex items-center gap-4">
         {avatarUrl ? (

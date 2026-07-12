@@ -3,13 +3,17 @@ import Layout from './components/Layout'
 import RequireAuth from './components/RequireAuth'
 import Admin from './pages/Admin'
 import Feed from './pages/Feed'
+import ForgotPassword from './pages/ForgotPassword'
 import Login from './pages/Login'
+import OAuthCallback from './pages/OAuthCallback'
 import PostDetail from './pages/PostDetail'
 import PostEditor from './pages/PostEditor'
 import Profile from './pages/Profile'
 import Register from './pages/Register'
+import ResetPassword from './pages/ResetPassword'
 import Search from './pages/Search'
 import Settings from './pages/Settings'
+import VerifyEmail from './pages/VerifyEmail'
 
 function NotFound() {
   return (
@@ -47,6 +51,10 @@ function App() {
         />
         <Route path="login" element={<Login />} />
         <Route path="register" element={<Register />} />
+        <Route path="forgot-password" element={<ForgotPassword />} />
+        <Route path="reset-password" element={<ResetPassword />} />
+        <Route path="verify-email" element={<VerifyEmail />} />
+        <Route path="oauth/callback" element={<OAuthCallback />} />
         <Route path="u/:username" element={<Profile />} />
         <Route path="search" element={<Search />} />
         <Route

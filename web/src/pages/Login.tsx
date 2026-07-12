@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { useMutation } from '@tanstack/react-query'
+import GitHubButton from '../components/GitHubButton'
 import { login } from '../lib/api'
 
 export default function Login() {
@@ -44,7 +45,12 @@ export default function Login() {
           />
         </label>
         <label className="block">
-          <span className="mb-1 block text-sm font-medium">Password</span>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-sm font-medium">Password</span>
+            <Link to="/forgot-password" className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+              Forgot password?
+            </Link>
+          </div>
           <input
             type="password"
             value={password}
@@ -62,6 +68,7 @@ export default function Login() {
           {mutation.isPending ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
+      <GitHubButton />
       <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
         No account yet?{' '}
         <Link to="/register" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">

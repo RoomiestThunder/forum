@@ -50,6 +50,7 @@ export interface CurrentUser {
   bio: string
   is_admin: boolean
   is_moderator: boolean
+  email_verified: boolean
   created_at: string
 }
 

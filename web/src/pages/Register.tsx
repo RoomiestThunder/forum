@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useMutation } from '@tanstack/react-query'
+import GitHubButton from '../components/GitHubButton'
 import { register } from '../lib/api'
 
 export default function Register() {
@@ -91,6 +92,7 @@ export default function Register() {
           {mutation.isPending ? 'Creating account…' : 'Register'}
         </button>
       </form>
+      <GitHubButton />
       <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
         Already have an account?{' '}
         <Link to="/login" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
