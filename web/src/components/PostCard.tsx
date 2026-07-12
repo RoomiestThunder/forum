@@ -11,7 +11,9 @@ export default function PostCard({ post }: { post: Post }) {
   return (
     <article className="rounded-xl border border-zinc-200 bg-white p-4 transition hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700">
       <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
-        <span className="font-medium text-zinc-700 dark:text-zinc-300">{post.author}</span>
+        <Link to={`/u/${post.author}`} className="font-medium text-zinc-700 hover:underline dark:text-zinc-300">
+          {post.author}
+        </Link>
         <span aria-hidden>·</span>
         <time dateTime={post.created_at}>{timeAgo(post.created_at)}</time>
         {post.categories?.map((c) => (
@@ -30,6 +32,15 @@ export default function PostCard({ post }: { post: Post }) {
         </Link>
       </h2>
       <p className="mt-1 line-clamp-3 text-sm text-zinc-600 dark:text-zinc-400">{post.content}</p>
+      {post.image_url && (
+        <Link to={`/post/${post.id}`}>
+          <img
+            src={post.image_url}
+            alt=""
+            className="mt-3 max-h-64 w-full rounded-lg border border-zinc-200 object-cover dark:border-zinc-800"
+          />
+        </Link>
+      )}
       <div className="mt-3 flex items-center gap-3">
         <VoteButtons
           likes={post.likes}

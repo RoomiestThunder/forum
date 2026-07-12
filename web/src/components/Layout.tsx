@@ -54,7 +54,9 @@ export default function Layout() {
                 <PenSquare size={15} />
                 <span className="hidden sm:inline">New post</span>
               </Link>
-              <span className="hidden truncate text-sm font-medium sm:inline">{username}</span>
+              <Link to={`/u/${username}`} className="hidden truncate text-sm font-medium hover:underline sm:inline">
+                {username}
+              </Link>
               <button
                 type="button"
                 onClick={handleLogout}

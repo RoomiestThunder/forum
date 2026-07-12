@@ -79,6 +79,13 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T
 }
 
+/** Upload a file as multipart/form-data under the "file" field. */
+export async function uploadFile<T>(path: string, file: File): Promise<T> {
+  const form = new FormData()
+  form.append('file', file)
+  return api<T>(path, { method: 'POST', body: form })
+}
+
 export async function login(loginValue: string, password: string): Promise<void> {
   const data = await api<AuthResponse>('/auth/login', {
     method: 'POST',

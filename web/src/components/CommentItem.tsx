@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
+import { Link } from 'react-router'
 import { useDeleteComment, useUpdateComment, useVoteComment } from '../lib/queries'
 import { timeAgo } from '../lib/time'
 import type { Comment } from '../lib/types'
@@ -29,7 +30,9 @@ export default function CommentItem({ comment }: { comment: Comment }) {
   return (
     <div className="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
-        <span className="font-medium text-zinc-700 dark:text-zinc-300">{comment.author}</span>
+        <Link to={`/u/${comment.author}`} className="font-medium text-zinc-700 hover:underline dark:text-zinc-300">
+          {comment.author}
+        </Link>
         <span aria-hidden>·</span>
         <time dateTime={comment.created_at}>{timeAgo(comment.created_at)}</time>
         {isOwn && !editing && (

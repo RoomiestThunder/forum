@@ -59,7 +59,9 @@ export default function PostDetail() {
     <div className="space-y-6">
       <article>
         <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">{post.author}</span>
+          <Link to={`/u/${post.author}`} className="font-medium text-zinc-700 hover:underline dark:text-zinc-300">
+            {post.author}
+          </Link>
           <span aria-hidden>·</span>
           <time dateTime={post.created_at} title={fullDate(post.created_at)}>
             {timeAgo(post.created_at)}
@@ -100,6 +102,14 @@ export default function PostDetail() {
         </div>
 
         <h1 className="mt-2 text-2xl font-bold">{post.title}</h1>
+
+        {post.image_url && (
+          <img
+            src={post.image_url}
+            alt=""
+            className="mt-4 max-h-96 w-full rounded-lg border border-zinc-200 object-cover dark:border-zinc-800"
+          />
+        )}
 
         <div className="prose prose-zinc mt-4 max-w-none dark:prose-invert">
           <Markdown remarkPlugins={[remarkGfm]}>{post.content}</Markdown>

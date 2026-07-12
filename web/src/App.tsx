@@ -5,7 +5,9 @@ import Feed from './pages/Feed'
 import Login from './pages/Login'
 import PostDetail from './pages/PostDetail'
 import PostEditor from './pages/PostEditor'
+import Profile from './pages/Profile'
 import Register from './pages/Register'
+import Settings from './pages/Settings'
 
 function NotFound() {
   return (
@@ -43,6 +45,15 @@ function App() {
         />
         <Route path="login" element={<Login />} />
         <Route path="register" element={<Register />} />
+        <Route path="u/:username" element={<Profile />} />
+        <Route
+          path="settings"
+          element={
+            <RequireAuth>
+              <Settings />
+            </RequireAuth>
+          }
+        />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

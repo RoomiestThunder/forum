@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ImagePlus, Loader2, X } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
 import {
   useCategories,
   useCreatePost,
   usePost,
   useUpdatePost,
+  useUploadPostImage,
 } from '../lib/queries'
 
 export default function PostEditor() {
@@ -17,12 +18,15 @@ export default function PostEditor() {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [selectedCategories, setSelectedCategories] = useState<number[]>([])
+  const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
 
   const { data: categories } = useCategories()
   const existing = usePost(postId ?? 0)
   const create = useCreatePost()
   const update = useUpdatePost(postId ?? 0)
+  const uploadImage = useUploadPostImage()
 
   // Prefill the form when editing.
   useEffect(() => {
@@ -69,7 +73,12 @@ export default function PostEditor() {
       )
     } else {
       create.mutate(
-        { title: trimmedTitle, content: trimmedContent, category_ids: selectedCategories },
+        {
+          title: trimmedTitle,
+          content: trimmedContent,
+          category_ids: selectedCategories,
+          image_url: imageUrl ?? undefined,
+        },
         { onSuccess: ({ id: newId }) => navigate(`/post/${newId}`) },
       )
     }
@@ -117,25 +126,75 @@ export default function PostEditor() {
           />
         </label>
         {!isEdit && (
-          <fieldset>
-            <legend className="mb-1 text-sm font-medium">Categories</legend>
-            <div className="flex flex-wrap gap-2">
-              {(categories ?? []).map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => toggleCategory(c.id)}
-                  className={`rounded-full px-3 py-1 text-sm font-medium transition ${
-                    selectedCategories.includes(c.id)
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                  }`}
-                >
-                  {c.name}
-                </button>
-              ))}
+          <>
+            <fieldset>
+              <legend className="mb-1 text-sm font-medium">Categories</legend>
+              <div className="flex flex-wrap gap-2">
+                {(categories ?? []).map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => toggleCategory(c.id)}
+                    className={`rounded-full px-3 py-1 text-sm font-medium transition ${
+                      selectedCategories.includes(c.id)
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                    }`}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+
+            <div>
+              <span className="mb-1 block text-sm font-medium">
+                Image <span className="font-normal text-zinc-400">(optional)</span>
+              </span>
+              {imageUrl ? (
+                <div className="relative inline-block">
+                  <img src={imageUrl} alt="" className="max-h-48 rounded-lg border border-zinc-200 dark:border-zinc-800" />
+                  <button
+                    type="button"
+                    onClick={() => setImageUrl(null)}
+                    aria-label="Remove image"
+                    className="absolute -top-2 -right-2 rounded-full bg-zinc-900 p-1 text-white shadow hover:bg-zinc-700"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) uploadImage.mutate(file, { onSuccess: (data) => setImageUrl(data.url) })
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInput.current?.click()}
+                    disabled={uploadImage.isPending}
+                    className="flex items-center gap-1.5 rounded-lg border border-dashed border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    {uploadImage.isPending ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <ImagePlus size={15} />
+                    )}
+                    {uploadImage.isPending ? 'Uploading…' : 'Add image'}
+                  </button>
+                  {uploadImage.isError && (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{uploadImage.error.message}</p>
+                  )}
+                </div>
+              )}
             </div>
-          </fieldset>
+          </>
         )}
         <div className="flex gap-2">
           <button

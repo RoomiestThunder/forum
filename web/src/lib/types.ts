@@ -40,4 +40,14 @@ export interface CurrentUser {
   email: string
   username: string
   avatar_url: string
+  bio: string
+  created_at: string
+}
+
+export interface PublicProfile {
+  username: string
+  avatar_url: string
+  bio: string
+  created_at: string
+  post_count: number
 }

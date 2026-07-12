@@ -4,14 +4,16 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api } from './api'
-import type { Category, Comment, Post } from './types'
+import { api, uploadFile } from './api'
+import type { Category, Comment, CurrentUser, Post, PublicProfile } from './types'
+import { useAuth } from '../stores/auth'
 
 export const PAGE_SIZE = 10
 
 export interface FeedParams {
   filter?: 'myposts' | 'liked'
   category?: number
+  author?: string
 }
 
 export function usePostsFeed(params: FeedParams) {
@@ -21,6 +23,7 @@ export function usePostsFeed(params: FeedParams) {
       const search = new URLSearchParams({ page: String(pageParam) })
       if (params.filter) search.set('filter', params.filter)
       if (params.category) search.set('category', String(params.category))
+      if (params.author) search.set('author', params.author)
       // The API returns null instead of [] for an empty page.
       return (await api<Post[] | null>(`/posts?${search}`)) ?? []
     },
@@ -60,8 +63,12 @@ function useInvalidatePosts() {
 export function useCreatePost() {
   const invalidate = useInvalidatePosts()
   return useMutation({
-    mutationFn: (body: { title: string; content: string; category_ids: number[] }) =>
-      api<{ id: number }>('/posts', { method: 'POST', body: JSON.stringify(body) }),
+    mutationFn: (body: {
+      title: string
+      content: string
+      category_ids: number[]
+      image_url?: string
+    }) => api<{ id: number }>('/posts', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => invalidate(),
   })
 }
@@ -137,5 +144,50 @@ export function useDeleteComment(postId: number) {
     mutationFn: (commentId: number) =>
       api(`/comments/${commentId}`, { method: 'DELETE' }),
     onSuccess: () => invalidate(postId),
+  })
+}
+
+export function useMe() {
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
+  return useQuery({
+    queryKey: ['me'],
+    queryFn: () => api<CurrentUser>('/me'),
+    enabled: loggedIn,
+  })
+}
+
+export function useProfile(username: string) {
+  return useQuery({
+    queryKey: ['profile', username],
+    queryFn: () => api<PublicProfile>(`/users/${username}`),
+    enabled: username !== '',
+  })
+}
+
+export function useUpdateBio() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (bio: string) => api('/me/bio', { method: 'PUT', body: JSON.stringify({ bio }) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['profile'] })
+      void qc.invalidateQueries({ queryKey: ['me'] })
+    },
+  })
+}
+
+export function useUploadAvatar() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => uploadFile<{ avatar_url: string }>('/me/avatar', file),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['profile'] })
+      void qc.invalidateQueries({ queryKey: ['me'] })
+    },
+  })
+}
+
+export function useUploadPostImage() {
+  return useMutation({
+    mutationFn: (file: File) => uploadFile<{ id: number; url: string }>('/upload', file),
   })
 }
