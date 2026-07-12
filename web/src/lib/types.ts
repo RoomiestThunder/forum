@@ -57,3 +57,26 @@ export interface PublicProfile {
   created_at: string
   post_count: number
 }
+
+export interface NewCommentPayload {
+  post_id: number
+  post_title: string
+  comment_id: number
+  actor: string
+}
+
+export interface NewLikePayload {
+  post_id: number
+  post_title: string
+  actor: string
+}
+
+export type NotificationPayload = NewCommentPayload | NewLikePayload
+
+export interface Notification {
+  id: number
+  type: 'new_comment' | 'new_like'
+  payload: NotificationPayload
+  read: boolean
+  created_at: string
+}

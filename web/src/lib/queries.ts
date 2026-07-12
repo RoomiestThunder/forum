@@ -5,7 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { api, uploadFile } from './api'
-import type { Category, Comment, CurrentUser, Post, PublicProfile, Tag } from './types'
+import type { Category, Comment, CurrentUser, Notification, Post, PublicProfile, Tag } from './types'
 import { useAuth } from '../stores/auth'
 
 export const PAGE_SIZE = 10
@@ -201,6 +201,47 @@ export function useUploadAvatar() {
 export function useUploadPostImage() {
   return useMutation({
     mutationFn: (file: File) => uploadFile<{ id: number; url: string }>('/upload', file),
+  })
+}
+
+export function useNotifications() {
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
+  return useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => api<Notification[] | null>('/notifications'),
+    enabled: loggedIn,
+  })
+}
+
+export function useUnreadNotificationCount() {
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
+  return useQuery({
+    queryKey: ['notifications', 'unread-count'],
+    queryFn: () => api<{ count: number }>('/notifications/unread-count'),
+    enabled: loggedIn,
+  })
+}
+
+function useInvalidateNotifications() {
+  const qc = useQueryClient()
+  return () => {
+    void qc.invalidateQueries({ queryKey: ['notifications'] })
+  }
+}
+
+export function useMarkNotificationRead() {
+  const invalidate = useInvalidateNotifications()
+  return useMutation({
+    mutationFn: (id: number) => api(`/notifications/${id}/read`, { method: 'POST' }),
+    onSuccess: () => invalidate(),
+  })
+}
+
+export function useMarkAllNotificationsRead() {
+  const invalidate = useInvalidateNotifications()
+  return useMutation({
+    mutationFn: () => api('/notifications/read-all', { method: 'POST' }),
+    onSuccess: () => invalidate(),
   })
 }
 

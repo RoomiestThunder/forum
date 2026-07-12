@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router'
 import { Moon, Sun, PenSquare, LogOut, MessagesSquare } from 'lucide-react'
+import NotificationBell from './NotificationBell'
 import { logout } from '../lib/api'
+import { useNotificationSocket } from '../lib/useNotificationSocket'
 import { useAuth } from '../stores/auth'
 
 function ThemeToggle() {
@@ -29,6 +31,7 @@ function ThemeToggle() {
 export default function Layout() {
   const navigate = useNavigate()
   const username = useAuth((s) => s.username)
+  useNotificationSocket()
 
   const handleLogout = async () => {
     await logout()
@@ -47,6 +50,7 @@ export default function Layout() {
           <ThemeToggle />
           {username ? (
             <>
+              <NotificationBell />
               <Link
                 to="/new"
                 className="flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-sm font-medium whitespace-nowrap text-white transition hover:bg-indigo-500"
