@@ -61,11 +61,11 @@ func (s *PostgresStore) CreateUser(email, username, passwordHash string) (int, e
 	return id, nil
 }
 
-func (s *PostgresStore) GetUserByEmail(email string) (*models.User, error) {
+const pgUserColumns = "id, email, username, password, COALESCE(avatar_url,''), COALESCE(bio,''), created_at"
+
+func scanPgUser(row *sql.Row) (*models.User, error) {
 	var u models.User
-	err := s.db.QueryRow(
-		"SELECT id, email, username, password, COALESCE(avatar_url,'') FROM users WHERE LOWER(email) = LOWER($1)", email,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL)
+	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("User")
 	}
@@ -73,34 +73,18 @@ func (s *PostgresStore) GetUserByEmail(email string) (*models.User, error) {
 		return nil, apperrors.DatabaseError(err)
 	}
 	return &u, nil
+}
+
+func (s *PostgresStore) GetUserByEmail(email string) (*models.User, error) {
+	return scanPgUser(s.db.QueryRow("SELECT "+pgUserColumns+" FROM users WHERE LOWER(email) = LOWER($1)", email))
 }
 
 func (s *PostgresStore) GetUserByID(id int) (*models.User, error) {
-	var u models.User
-	err := s.db.QueryRow(
-		"SELECT id, email, username, password, COALESCE(avatar_url,'') FROM users WHERE id = $1", id,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL)
-	if err == sql.ErrNoRows {
-		return nil, apperrors.NotFoundError("User")
-	}
-	if err != nil {
-		return nil, apperrors.DatabaseError(err)
-	}
-	return &u, nil
+	return scanPgUser(s.db.QueryRow("SELECT "+pgUserColumns+" FROM users WHERE id = $1", id))
 }
 
 func (s *PostgresStore) GetUserByUsername(username string) (*models.User, error) {
-	var u models.User
-	err := s.db.QueryRow(
-		"SELECT id, email, username, password, COALESCE(avatar_url,'') FROM users WHERE LOWER(username) = LOWER($1)", username,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL)
-	if err == sql.ErrNoRows {
-		return nil, apperrors.NotFoundError("User")
-	}
-	if err != nil {
-		return nil, apperrors.DatabaseError(err)
-	}
-	return &u, nil
+	return scanPgUser(s.db.QueryRow("SELECT "+pgUserColumns+" FROM users WHERE LOWER(username) = LOWER($1)", username))
 }
 
 func (s *PostgresStore) UpdateUserAvatar(userID int, avatarURL string) error {
@@ -108,13 +92,18 @@ func (s *PostgresStore) UpdateUserAvatar(userID int, avatarURL string) error {
 	return err
 }
 
+func (s *PostgresStore) UpdateUserBio(userID int, bio string) error {
+	_, err := s.db.Exec("UPDATE users SET bio = $1 WHERE id = $2", bio, userID)
+	return err
+}
+
 // ---- Post operations ----
 
-func (s *PostgresStore) CreatePost(userID int, title, content string, categoryIDs []int) (int, error) {
+func (s *PostgresStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error) {
 	var postID int
 	err := s.db.QueryRow(
-		"INSERT INTO posts (user_id, title, content, created_at) VALUES ($1, $2, $3, $4) RETURNING id",
-		userID, title, content, time.Now(),
+		"INSERT INTO posts (user_id, title, content, image_url, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+		userID, title, content, imageURL, time.Now(),
 	).Scan(&postID)
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)

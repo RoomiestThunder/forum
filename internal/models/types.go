@@ -3,11 +3,23 @@ package models
 import "time"
 
 type User struct {
-	ID        int    `json:"id"`
-	Email     string `json:"email"`
-	Username  string `json:"username"`
-	Password  string `json:"-"`
-	AvatarURL string `json:"avatar_url"`
+	ID        int       `json:"id"`
+	Email     string    `json:"email"`
+	Username  string    `json:"username"`
+	Password  string    `json:"-"`
+	AvatarURL string    `json:"avatar_url"`
+	Bio       string    `json:"bio"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PublicProfile is what GET /api/v1/users/{username} returns - a User
+// without the fields only the owner (or nobody) should see.
+type PublicProfile struct {
+	Username  string    `json:"username"`
+	AvatarURL string    `json:"avatar_url"`
+	Bio       string    `json:"bio"`
+	CreatedAt time.Time `json:"created_at"`
+	PostCount int       `json:"post_count"`
 }
 
 type Category struct {

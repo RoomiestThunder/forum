@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"forum/internal/models"
 )
 
 func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
@@ -25,9 +27,10 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 
 	filter := q.Get("filter")
 	category := q.Get("category")
+	author := q.Get("author")
 
 	// Try cache for default listing
-	if filter == "" && category == "" && s.cache != nil {
+	if filter == "" && category == "" && author == "" && s.cache != nil {
 		cacheKey = fmt.Sprintf("page=%d", page)
 		if posts, err := s.cache.GetPosts(r.Context(), cacheKey); err == nil && posts != nil {
 			jsonResponse(w, posts, http.StatusOK)
@@ -45,6 +48,14 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 		posts, err = s.store.GetPostsByUser(userID, pageSize, offset)
 	case filter == "liked" && userID != 0:
 		posts, err = s.store.GetLikedPostsByUser(userID, pageSize, offset)
+	case author != "":
+		var u *models.User
+		u, err = s.store.GetUserByUsername(author)
+		if err == nil {
+			posts, err = s.store.GetPostsByUser(u.ID, pageSize, offset)
+		} else {
+			posts, err = []*models.Post{}, nil
+		}
 	case category != "":
 		catID, _ := strconv.Atoi(category)
 		posts, err = s.store.GetPostsByCategory(catID, pageSize, offset)
@@ -84,6 +95,7 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		Content     string `json:"content"`
 		CategoryIDs []int  `json:"category_ids"`
+		ImageURL    string `json:"image_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
@@ -101,7 +113,7 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := userIDFromCtx(r)
-	postID, err := s.store.CreatePost(userID, body.Title, body.Content, body.CategoryIDs)
+	postID, err := s.store.CreatePost(userID, body.Title, body.Content, body.CategoryIDs, body.ImageURL)
 	if err != nil {
 		jsonError(w, "failed to create post", http.StatusInternalServerError)
 		return

@@ -53,7 +53,9 @@ func sqliteSchema(db *sql.DB) error {
 		email TEXT UNIQUE NOT NULL,
 		username TEXT NOT NULL,
 		password TEXT NOT NULL,
-		avatar_url TEXT NOT NULL DEFAULT ''
+		avatar_url TEXT NOT NULL DEFAULT '',
+		bio TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE TABLE IF NOT EXISTS categories (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,10 +154,11 @@ func (s *SQLiteStore) CreateUser(email, username, passwordHash string) (int, err
 	return int(id), nil
 }
 
-func (s *SQLiteStore) GetUserByEmail(email string) (*models.User, error) {
+const userColumns = "id, email, username, password, avatar_url, bio, created_at"
+
+func scanUser(row *sql.Row) (*models.User, error) {
 	var u models.User
-	err := s.db.QueryRow("SELECT id, email, username, password, avatar_url FROM users WHERE LOWER(email) = LOWER(?)", email).
-		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL)
+	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("User")
 	}
@@ -163,32 +166,18 @@ func (s *SQLiteStore) GetUserByEmail(email string) (*models.User, error) {
 		return nil, apperrors.DatabaseError(err)
 	}
 	return &u, nil
+}
+
+func (s *SQLiteStore) GetUserByEmail(email string) (*models.User, error) {
+	return scanUser(s.db.QueryRow("SELECT "+userColumns+" FROM users WHERE LOWER(email) = LOWER(?)", email))
 }
 
 func (s *SQLiteStore) GetUserByID(id int) (*models.User, error) {
-	var u models.User
-	err := s.db.QueryRow("SELECT id, email, username, password, avatar_url FROM users WHERE id = ?", id).
-		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL)
-	if err == sql.ErrNoRows {
-		return nil, apperrors.NotFoundError("User")
-	}
-	if err != nil {
-		return nil, apperrors.DatabaseError(err)
-	}
-	return &u, nil
+	return scanUser(s.db.QueryRow("SELECT "+userColumns+" FROM users WHERE id = ?", id))
 }
 
 func (s *SQLiteStore) GetUserByUsername(username string) (*models.User, error) {
-	var u models.User
-	err := s.db.QueryRow("SELECT id, email, username, password, avatar_url FROM users WHERE LOWER(username) = LOWER(?)", username).
-		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL)
-	if err == sql.ErrNoRows {
-		return nil, apperrors.NotFoundError("User")
-	}
-	if err != nil {
-		return nil, apperrors.DatabaseError(err)
-	}
-	return &u, nil
+	return scanUser(s.db.QueryRow("SELECT "+userColumns+" FROM users WHERE LOWER(username) = LOWER(?)", username))
 }
 
 func (s *SQLiteStore) UpdateUserAvatar(userID int, avatarURL string) error {
@@ -196,10 +185,15 @@ func (s *SQLiteStore) UpdateUserAvatar(userID int, avatarURL string) error {
 	return err
 }
 
+func (s *SQLiteStore) UpdateUserBio(userID int, bio string) error {
+	_, err := s.db.Exec("UPDATE users SET bio = ? WHERE id = ?", bio, userID)
+	return err
+}
+
 // ---- Post operations ----
 
-func (s *SQLiteStore) CreatePost(userID int, title, content string, categoryIDs []int) (int, error) {
-	res, err := s.db.Exec("INSERT INTO posts (user_id, title, content, created_at) VALUES (?, ?, ?, ?)", userID, title, content, time.Now())
+func (s *SQLiteStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error) {
+	res, err := s.db.Exec("INSERT INTO posts (user_id, title, content, image_url, created_at) VALUES (?, ?, ?, ?, ?)", userID, title, content, imageURL, time.Now())
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)
 	}

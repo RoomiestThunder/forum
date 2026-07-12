@@ -32,6 +32,22 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// optionalAuth attaches the user ID to the context when a valid Bearer
+// token is present, but - unlike requireAuth - lets the request through
+// either way. Routes that behave differently for logged-in users (e.g. the
+// feed's "my posts" filter) without requiring a login use this.
+func (s *Server) optionalAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			if claims, err := s.jwt.ValidateAccessToken(auth[7:]); err == nil {
+				r = r.WithContext(context.WithValue(r.Context(), ctxUserID, claims.UserID))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func userIDFromCtx(r *http.Request) int {
 	id, _ := r.Context().Value(ctxUserID).(int)
 	return id

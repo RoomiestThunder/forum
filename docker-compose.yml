@@ -33,6 +33,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations/001_initial.up.sql:/docker-entrypoint-initdb.d/001_initial.sql
+      - ./migrations/002_user_profiles.up.sql:/docker-entrypoint-initdb.d/002_user_profiles.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U forum"]
       interval: 5s

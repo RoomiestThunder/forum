@@ -12,9 +12,10 @@ type Store interface {
 	GetUserByID(id int) (*models.User, error)
 	GetUserByUsername(username string) (*models.User, error)
 	UpdateUserAvatar(userID int, avatarURL string) error
+	UpdateUserBio(userID int, bio string) error
 
 	// Post operations
-	CreatePost(userID int, title, content string, categoryIDs []int) (int, error)
+	CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error)
 	GetPost(id int) (*models.Post, error)
 	GetPosts(limit, offset int) ([]*models.Post, error)
 	GetPostsByUser(userID, limit, offset int) ([]*models.Post, error)

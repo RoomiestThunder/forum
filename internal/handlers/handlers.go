@@ -501,7 +501,7 @@ func createPostHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, err := store.CreatePost(user.ID, title, content, catIDs); err != nil {
+	if _, err := store.CreatePost(user.ID, title, content, catIDs, ""); err != nil {
 		Render500(w, "Error creating post.")
 		return
 	}

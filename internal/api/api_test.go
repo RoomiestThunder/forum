@@ -249,3 +249,109 @@ func TestPostTitleValidation(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+func TestProfile(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	createPost(t, srv.URL, alice, "Post one")
+	createPost(t, srv.URL, alice, "Post two")
+
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/users/alice", "", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("profile: want 200, got %d", resp.StatusCode)
+	}
+	profile := decode[map[string]any](t, resp)
+	if profile["username"] != "alice" {
+		t.Errorf("profile username: want alice, got %v", profile["username"])
+	}
+	if profile["post_count"] != float64(2) {
+		t.Errorf("profile post_count: want 2, got %v", profile["post_count"])
+	}
+	if _, hasEmail := profile["email"]; hasEmail {
+		t.Error("profile should not leak email")
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/users/nobody", "", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown profile: want 404, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Update bio.
+	resp = doJSON(t, http.MethodPut, srv.URL+"/api/v1/me/bio", alice, map[string]string{
+		"bio": "Hello, I like Go.",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update bio: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/users/alice", "", nil)
+	profile = decode[map[string]any](t, resp)
+	if profile["bio"] != "Hello, I like Go." {
+		t.Errorf("bio: want updated bio, got %v", profile["bio"])
+	}
+
+	resp = doJSON(t, http.MethodPut, srv.URL+"/api/v1/me/bio", alice, map[string]string{
+		"bio": strings.Repeat("x", 281),
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized bio: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestListPostsFilters(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	bob := registerUser(t, srv.URL, "bob")
+	alicePostID := createPost(t, srv.URL, alice, "Alice's post")
+	createPost(t, srv.URL, bob, "Bob's post")
+
+	// myposts must reflect the authenticated caller, not everyone.
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=myposts", alice, nil)
+	posts := decode[[]map[string]any](t, resp)
+	if len(posts) != 1 || posts[0]["title"] != "Alice's post" {
+		t.Fatalf("myposts for alice: want [Alice's post], got %+v", posts)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=myposts", bob, nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 1 || posts[0]["title"] != "Bob's post" {
+		t.Fatalf("myposts for bob: want [Bob's post], got %+v", posts)
+	}
+
+	// liked must reflect what the caller liked, not what's popular globally.
+	resp = postJSON(t, srv.URL+"/api/v1/like/post", bob, map[string]any{
+		"post_id": alicePostID, "is_like": true,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("like: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=liked", bob, nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 1 || posts[0]["title"] != "Alice's post" {
+		t.Fatalf("liked for bob: want [Alice's post], got %+v", posts)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=liked", alice, nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 0 {
+		t.Fatalf("liked for alice: want [], got %+v", posts)
+	}
+
+	// author filter is public, no auth required.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?author=bob", "", nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 1 || posts[0]["title"] != "Bob's post" {
+		t.Fatalf("author=bob: want [Bob's post], got %+v", posts)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?author=nobody", "", nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 0 {
+		t.Fatalf("author=nobody: want [], got %+v", posts)
+	}
+}
