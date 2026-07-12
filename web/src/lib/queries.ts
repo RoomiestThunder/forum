@@ -52,6 +52,18 @@ export function useTagSuggestions(query: string) {
   })
 }
 
+export function useSearch(query: string, page: number) {
+  return useQuery({
+    queryKey: ['search', query, page],
+    queryFn: () =>
+      api<{ posts: Post[] | null; total: number; page: number }>(
+        `/search?q=${encodeURIComponent(query)}&page=${page}`,
+      ),
+    enabled: query.trim().length > 0,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export function useCategories() {
   return useQuery({
     queryKey: ['categories'],

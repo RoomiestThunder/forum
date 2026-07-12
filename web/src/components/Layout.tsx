@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router'
-import { Moon, Sun, PenSquare, LogOut, MessagesSquare } from 'lucide-react'
+import { Moon, Sun, PenSquare, LogOut, MessagesSquare, Search } from 'lucide-react'
 import NotificationBell from './NotificationBell'
+import SearchBox from './SearchBox'
 import { logout } from '../lib/api'
 import { useNotificationSocket } from '../lib/useNotificationSocket'
 import { useAuth } from '../stores/auth'
@@ -46,7 +47,14 @@ export default function Layout() {
             <MessagesSquare size={20} className="text-indigo-600 dark:text-indigo-400" />
             <span className="hidden sm:inline">Forum</span>
           </Link>
-          <div className="flex-1" />
+          <SearchBox />
+          <Link
+            to="/search"
+            aria-label="Search"
+            className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 md:hidden dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          >
+            <Search size={18} />
+          </Link>
           <ThemeToggle />
           {username ? (
             <>

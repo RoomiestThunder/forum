@@ -567,3 +567,48 @@ func TestNotifications(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+func TestSearch(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
+		"title": "Understanding Go channels", "content": "Channels are a core concurrency primitive.",
+		"category_ids": []int{1},
+	}).Body.Close()
+	postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
+		"title": "React hooks", "content": "useEffect and useState.", "category_ids": []int{1},
+	}).Body.Close()
+
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/search?q=channels", "", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("search: want 200, got %d", resp.StatusCode)
+	}
+	result := decode[struct {
+		Posts []map[string]any `json:"posts"`
+		Total int              `json:"total"`
+	}](t, resp)
+	if result.Total != 1 || len(result.Posts) != 1 || result.Posts[0]["title"] != "Understanding Go channels" {
+		t.Fatalf("search 'channels': want 1 match, got %+v", result)
+	}
+	// Regression: queryPosts scans likes/dislikes/comment_count columns that
+	// a naive SELECT (without the aggregate JOINs) won't have, which used to
+	// blow up as a 500 instead of returning results.
+	if result.Posts[0]["likes"] != float64(0) || result.Posts[0]["comment_count"] != float64(0) {
+		t.Errorf("search result missing aggregate columns: %+v", result.Posts[0])
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/search?q=nonexistentterm", "", nil)
+	result = decode[struct {
+		Posts []map[string]any `json:"posts"`
+		Total int              `json:"total"`
+	}](t, resp)
+	if result.Total != 0 || len(result.Posts) != 0 {
+		t.Fatalf("search with no matches: want empty, got %+v", result)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/search", "", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("search without q: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}

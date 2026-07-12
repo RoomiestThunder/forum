@@ -446,11 +446,9 @@ func (s *SQLiteStore) SearchPosts(query string, limit, offset int) ([]*models.Po
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM posts WHERE title LIKE ? OR content LIKE ?", like, like).Scan(&total); err != nil {
 		return nil, 0, apperrors.DatabaseError(err)
 	}
-	posts, err := s.queryPosts(`
-		SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username, COALESCE(p.image_url,'')
-		FROM posts p JOIN users u ON p.user_id = u.id
+	posts, err := s.queryPosts(postBaseQuery+`
 		WHERE p.title LIKE ? OR p.content LIKE ?
-		ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, like, like, limit, offset)
+		GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, like, like, limit, offset)
 	return posts, total, err
 }
 

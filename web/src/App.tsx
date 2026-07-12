@@ -7,6 +7,7 @@ import PostDetail from './pages/PostDetail'
 import PostEditor from './pages/PostEditor'
 import Profile from './pages/Profile'
 import Register from './pages/Register'
+import Search from './pages/Search'
 import Settings from './pages/Settings'
 
 function NotFound() {
@@ -46,6 +47,7 @@ function App() {
         <Route path="login" element={<Login />} />
         <Route path="register" element={<Register />} />
         <Route path="u/:username" element={<Profile />} />
+        <Route path="search" element={<Search />} />
         <Route
           path="settings"
           element={
