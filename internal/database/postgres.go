@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	apperrors "forum/internal/errors"
@@ -140,6 +141,7 @@ func (s *PostgresStore) GetPost(id int) (*models.Post, error) {
 		return nil, apperrors.DatabaseError(err)
 	}
 	s.loadCategories(&p)
+	s.loadTags(&p)
 	return &p, nil
 }
 
@@ -225,6 +227,7 @@ func (s *PostgresStore) queryPosts(query string, args ...interface{}) ([]*models
 
 	for _, p := range posts {
 		s.loadCategories(p)
+		s.loadTags(p)
 	}
 	return posts, err
 }
@@ -242,6 +245,22 @@ func (s *PostgresStore) loadCategories(p *models.Post) {
 		var c models.Category
 		_ = rows.Scan(&c.ID, &c.Name)
 		p.Categories = append(p.Categories, c)
+	}
+}
+
+func (s *PostgresStore) loadTags(p *models.Post) {
+	rows, err := s.db.Query(
+		"SELECT t.id, t.name FROM tags t JOIN post_tags pt ON t.id = pt.tag_id WHERE pt.post_id = $1 ORDER BY t.name",
+		p.ID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t models.Tag
+		_ = rows.Scan(&t.ID, &t.Name)
+		p.Tags = append(p.Tags, t)
 	}
 }
 
@@ -269,6 +288,8 @@ func (s *PostgresStore) DeletePost(id, userID int) error {
 		args []interface{}
 	}{
 		{"DELETE FROM post_categories WHERE post_id = $1", []interface{}{id}},
+		{"DELETE FROM post_tags WHERE post_id = $1", []interface{}{id}},
+		{"DELETE FROM bookmarks WHERE post_id = $1", []interface{}{id}},
 		{"DELETE FROM post_likes WHERE post_id = $1", []interface{}{id}},
 		{"DELETE FROM comment_likes WHERE comment_id IN (SELECT id FROM comments WHERE post_id = $1)", []interface{}{id}},
 		{"DELETE FROM comments WHERE post_id = $1", []interface{}{id}},
@@ -325,6 +346,126 @@ func (s *PostgresStore) GetCategories() ([]*models.Category, error) {
 		cats = append(cats, &c)
 	}
 	return cats, nil
+}
+
+// ---- Tag operations ----
+
+func (s *PostgresStore) SetPostTags(postID int, tagNames []string) error {
+	seen := make(map[string]bool)
+	var names []string
+	for _, n := range tagNames {
+		n = strings.ToLower(strings.TrimSpace(n))
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+
+	if _, err := s.db.Exec("DELETE FROM post_tags WHERE post_id = $1", postID); err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	for _, name := range names {
+		var tagID int
+		err := s.db.QueryRow(
+			"INSERT INTO tags (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+			name,
+		).Scan(&tagID)
+		if err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if _, err := s.db.Exec("INSERT INTO post_tags (post_id, tag_id) VALUES ($1, $2)", postID, tagID); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetPostsByTag(tagName string, limit, offset int) ([]*models.Post, error) {
+	q := `
+SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
+       COALESCE(p.image_url,''),
+       COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
+       COUNT(DISTINCT c.id)
+FROM posts p
+JOIN users u ON p.user_id = u.id
+JOIN post_tags pt ON p.id = pt.post_id
+JOIN tags t ON pt.tag_id = t.id
+LEFT JOIN post_likes pl ON p.id = pl.post_id
+LEFT JOIN comments c ON p.id = c.post_id
+WHERE LOWER(t.name) = LOWER($1)
+GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`
+	return s.queryPosts(q, tagName, limit, offset)
+}
+
+func (s *PostgresStore) CountPostsByTag(tagName string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(DISTINCT p.id) FROM posts p
+		JOIN post_tags pt ON p.id = pt.post_id
+		JOIN tags t ON pt.tag_id = t.id
+		WHERE LOWER(t.name) = LOWER($1)`, tagName).Scan(&count)
+	return count, err
+}
+
+func (s *PostgresStore) SearchTags(prefix string, limit int) ([]*models.Tag, error) {
+	rows, err := s.db.Query("SELECT id, name FROM tags WHERE name ILIKE $1 ORDER BY name LIMIT $2", prefix+"%", limit)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var tags []*models.Tag
+	for rows.Next() {
+		var t models.Tag
+		if err := rows.Scan(&t.ID, &t.Name); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		tags = append(tags, &t)
+	}
+	return tags, rows.Err()
+}
+
+// ---- Bookmark operations ----
+
+func (s *PostgresStore) ToggleBookmark(postID, userID int, bookmarked bool) error {
+	if bookmarked {
+		_, err := s.db.Exec("INSERT INTO bookmarks (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", userID, postID)
+		return err
+	}
+	_, err := s.db.Exec("DELETE FROM bookmarks WHERE user_id = $1 AND post_id = $2", userID, postID)
+	return err
+}
+
+func (s *PostgresStore) IsBookmarked(postID, userID int) (bool, error) {
+	var exists int
+	err := s.db.QueryRow("SELECT 1 FROM bookmarks WHERE user_id = $1 AND post_id = $2", userID, postID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (s *PostgresStore) GetBookmarkedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
+	q := `
+SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
+       COALESCE(p.image_url,''),
+       COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
+       COUNT(DISTINCT c.id)
+FROM posts p
+JOIN users u ON p.user_id = u.id
+JOIN bookmarks b ON p.id = b.post_id AND b.user_id = $1
+LEFT JOIN post_likes pl ON p.id = pl.post_id
+LEFT JOIN comments c ON p.id = c.post_id
+GROUP BY p.id, u.username, b.created_at ORDER BY b.created_at DESC LIMIT $2 OFFSET $3`
+	return s.queryPosts(q, userID, limit, offset)
+}
+
+func (s *PostgresStore) CountBookmarkedPostsByUser(userID int) (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE user_id = $1", userID).Scan(&count)
+	return count, err
 }
 
 // ---- Comment operations ----

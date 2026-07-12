@@ -27,6 +27,11 @@ type Category struct {
 	Name string `json:"name"`
 }
 
+type Tag struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 type Post struct {
 	ID           int        `json:"id"`
 	UserID       int        `json:"user_id"`
@@ -37,6 +42,7 @@ type Post struct {
 	Likes        int        `json:"likes"`
 	Dislikes     int        `json:"dislikes"`
 	Categories   []Category `json:"categories"`
+	Tags         []Tag      `json:"tags"`
 	CommentCount int        `json:"comment_count"`
 	ImageURL     string     `json:"image_url,omitempty"`
 }

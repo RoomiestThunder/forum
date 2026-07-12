@@ -77,7 +77,7 @@ func (s *Server) Mount(root chi.Router) {
 		r.Route("/posts", func(r chi.Router) {
 			r.With(s.optionalAuth).Get("/", s.listPosts)
 			r.With(s.requireAuth).Post("/", s.createPost)
-			r.Get("/{id}", s.getPost)
+			r.With(s.optionalAuth).Get("/{id}", s.getPost)
 			r.With(s.requireAuth).Put("/{id}", s.updatePost)
 			r.With(s.requireAuth).Delete("/{id}", s.deletePost)
 			r.With(s.requireAuth).Post("/{id}", s.createComment)
@@ -92,6 +92,9 @@ func (s *Server) Mount(root chi.Router) {
 			r.With(s.requireAuth).Post("/post", s.likePost)
 			r.With(s.requireAuth).Post("/comment", s.likeComment)
 		})
+
+		r.With(s.requireAuth).Post("/bookmarks", s.toggleBookmark)
+		r.Get("/tags", s.searchTags)
 
 		r.Get("/search", s.search)
 		r.With(s.requireAuth).Post("/upload", s.upload)

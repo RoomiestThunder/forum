@@ -28,9 +28,10 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 	filter := q.Get("filter")
 	category := q.Get("category")
 	author := q.Get("author")
+	tag := q.Get("tag")
 
 	// Try cache for default listing
-	if filter == "" && category == "" && author == "" && s.cache != nil {
+	if filter == "" && category == "" && author == "" && tag == "" && s.cache != nil {
 		cacheKey = fmt.Sprintf("page=%d", page)
 		if posts, err := s.cache.GetPosts(r.Context(), cacheKey); err == nil && posts != nil {
 			jsonResponse(w, posts, http.StatusOK)
@@ -48,6 +49,8 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 		posts, err = s.store.GetPostsByUser(userID, pageSize, offset)
 	case filter == "liked" && userID != 0:
 		posts, err = s.store.GetLikedPostsByUser(userID, pageSize, offset)
+	case filter == "saved" && userID != 0:
+		posts, err = s.store.GetBookmarkedPostsByUser(userID, pageSize, offset)
 	case author != "":
 		var u *models.User
 		u, err = s.store.GetUserByUsername(author)
@@ -56,6 +59,8 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 		} else {
 			posts, err = []*models.Post{}, nil
 		}
+	case tag != "":
+		posts, err = s.store.GetPostsByTag(tag, pageSize, offset)
 	case category != "":
 		catID, _ := strconv.Atoi(category)
 		posts, err = s.store.GetPostsByCategory(catID, pageSize, offset)
@@ -87,15 +92,22 @@ func (s *Server) getPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	comments, _ := s.store.GetCommentsByPostID(id)
-	jsonResponse(w, map[string]interface{}{"post": post, "comments": comments}, http.StatusOK)
+
+	resp := map[string]interface{}{"post": post, "comments": comments}
+	if userID := userIDFromCtx(r); userID != 0 {
+		bookmarked, _ := s.store.IsBookmarked(id, userID)
+		resp["is_bookmarked"] = bookmarked
+	}
+	jsonResponse(w, resp, http.StatusOK)
 }
 
 func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title       string `json:"title"`
-		Content     string `json:"content"`
-		CategoryIDs []int  `json:"category_ids"`
-		ImageURL    string `json:"image_url"`
+		Title       string   `json:"title"`
+		Content     string   `json:"content"`
+		CategoryIDs []int    `json:"category_ids"`
+		ImageURL    string   `json:"image_url"`
+		Tags        []string `json:"tags"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
@@ -111,12 +123,19 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "title must be 100 characters or less", http.StatusBadRequest)
 		return
 	}
+	if len(body.Tags) > 5 {
+		jsonError(w, "at most 5 tags allowed", http.StatusBadRequest)
+		return
+	}
 
 	userID := userIDFromCtx(r)
 	postID, err := s.store.CreatePost(userID, body.Title, body.Content, body.CategoryIDs, body.ImageURL)
 	if err != nil {
 		jsonError(w, "failed to create post", http.StatusInternalServerError)
 		return
+	}
+	if len(body.Tags) > 0 {
+		_ = s.store.SetPostTags(postID, body.Tags)
 	}
 
 	// Invalidate posts cache

@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"log/slog"
+	"strings"
 	"time"
 
 	apperrors "forum/internal/errors"
@@ -127,6 +128,25 @@ func sqliteSchema(db *sql.DB) error {
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY(user_id) REFERENCES users(id)
 	);
+	CREATE TABLE IF NOT EXISTS tags (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT UNIQUE NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS post_tags (
+		post_id INTEGER,
+		tag_id INTEGER,
+		FOREIGN KEY(post_id) REFERENCES posts(id),
+		FOREIGN KEY(tag_id) REFERENCES tags(id)
+	);
+	CREATE TABLE IF NOT EXISTS bookmarks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		post_id INTEGER NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_id) REFERENCES users(id),
+		FOREIGN KEY(post_id) REFERENCES posts(id),
+		UNIQUE(user_id, post_id)
+	);
 	`)
 	if err != nil {
 		return err
@@ -229,6 +249,7 @@ func (s *SQLiteStore) GetPost(id int) (*models.Post, error) {
 		return nil, apperrors.DatabaseError(err)
 	}
 	s.loadCategories(p)
+	s.loadTags(p)
 	return p, nil
 }
 
@@ -306,6 +327,7 @@ func (s *SQLiteStore) queryPosts(query string, args ...interface{}) ([]*models.P
 	// which would deadlock a pool capped at a single connection.
 	for _, p := range posts {
 		s.loadCategories(p)
+		s.loadTags(p)
 	}
 	return posts, err
 }
@@ -325,6 +347,22 @@ func (s *SQLiteStore) loadCategories(p *models.Post) {
 		var c models.Category
 		_ = rows.Scan(&c.ID, &c.Name)
 		p.Categories = append(p.Categories, c)
+	}
+}
+
+func (s *SQLiteStore) loadTags(p *models.Post) {
+	rows, err := s.db.Query(
+		"SELECT t.id, t.name FROM tags t JOIN post_tags pt ON t.id = pt.tag_id WHERE pt.post_id = ? ORDER BY t.name",
+		p.ID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t models.Tag
+		_ = rows.Scan(&t.ID, &t.Name)
+		p.Tags = append(p.Tags, t)
 	}
 }
 
@@ -349,6 +387,8 @@ func (s *SQLiteStore) DeletePost(id, userID int) error {
 
 	stmts := []struct{ q string; args []interface{} }{
 		{"DELETE FROM post_categories WHERE post_id = ?", []interface{}{id}},
+		{"DELETE FROM post_tags WHERE post_id = ?", []interface{}{id}},
+		{"DELETE FROM bookmarks WHERE post_id = ?", []interface{}{id}},
 		{"DELETE FROM post_likes WHERE post_id = ?", []interface{}{id}},
 		{"DELETE FROM comment_likes WHERE comment_id IN (SELECT id FROM comments WHERE post_id = ?)", []interface{}{id}},
 		{"DELETE FROM comments WHERE post_id = ?", []interface{}{id}},
@@ -420,6 +460,127 @@ func (s *SQLiteStore) GetCategories() ([]*models.Category, error) {
 		cats = append(cats, &c)
 	}
 	return cats, nil
+}
+
+// ---- Tag operations ----
+
+// SetPostTags replaces a post's tag set with tagNames, creating any tags
+// that don't exist yet. Names are trimmed and de-duplicated case-insensitively.
+func (s *SQLiteStore) SetPostTags(postID int, tagNames []string) error {
+	seen := make(map[string]bool)
+	var names []string
+	for _, n := range tagNames {
+		n = strings.ToLower(strings.TrimSpace(n))
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+
+	if _, err := s.db.Exec("DELETE FROM post_tags WHERE post_id = ?", postID); err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	for _, name := range names {
+		if _, err := s.db.Exec("INSERT OR IGNORE INTO tags (name) VALUES (?)", name); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		var tagID int
+		if err := s.db.QueryRow("SELECT id FROM tags WHERE name = ?", name).Scan(&tagID); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if _, err := s.db.Exec("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)", postID, tagID); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetPostsByTag(tagName string, limit, offset int) ([]*models.Post, error) {
+	q := `
+SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
+       COALESCE(p.image_url,''),
+       COALESCE(SUM(CASE WHEN pl.is_like = 1 THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN pl.is_like = 0 THEN 1 ELSE 0 END), 0),
+       COUNT(DISTINCT c.id)
+FROM posts p
+JOIN users u ON p.user_id = u.id
+JOIN post_tags pt ON p.id = pt.post_id
+JOIN tags t ON pt.tag_id = t.id
+LEFT JOIN post_likes pl ON p.id = pl.post_id
+LEFT JOIN comments c ON p.id = c.post_id
+WHERE LOWER(t.name) = LOWER(?)
+GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+	return s.queryPosts(q, tagName, limit, offset)
+}
+
+func (s *SQLiteStore) CountPostsByTag(tagName string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(DISTINCT p.id) FROM posts p
+		JOIN post_tags pt ON p.id = pt.post_id
+		JOIN tags t ON pt.tag_id = t.id
+		WHERE LOWER(t.name) = LOWER(?)`, tagName).Scan(&count)
+	return count, err
+}
+
+func (s *SQLiteStore) SearchTags(prefix string, limit int) ([]*models.Tag, error) {
+	rows, err := s.db.Query("SELECT id, name FROM tags WHERE name LIKE ? ORDER BY name LIMIT ?", prefix+"%", limit)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var tags []*models.Tag
+	for rows.Next() {
+		var t models.Tag
+		if err := rows.Scan(&t.ID, &t.Name); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		tags = append(tags, &t)
+	}
+	return tags, rows.Err()
+}
+
+// ---- Bookmark operations ----
+
+func (s *SQLiteStore) ToggleBookmark(postID, userID int, bookmarked bool) error {
+	if bookmarked {
+		_, err := s.db.Exec("INSERT OR IGNORE INTO bookmarks (user_id, post_id) VALUES (?, ?)", userID, postID)
+		return err
+	}
+	_, err := s.db.Exec("DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?", userID, postID)
+	return err
+}
+
+func (s *SQLiteStore) IsBookmarked(postID, userID int) (bool, error) {
+	var exists int
+	err := s.db.QueryRow("SELECT 1 FROM bookmarks WHERE user_id = ? AND post_id = ?", userID, postID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (s *SQLiteStore) GetBookmarkedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
+	q := `
+SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
+       COALESCE(p.image_url,''),
+       COALESCE(SUM(CASE WHEN pl.is_like = 1 THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN pl.is_like = 0 THEN 1 ELSE 0 END), 0),
+       COUNT(DISTINCT c.id)
+FROM posts p
+JOIN users u ON p.user_id = u.id
+JOIN bookmarks b ON p.id = b.post_id AND b.user_id = ?
+LEFT JOIN post_likes pl ON p.id = pl.post_id
+LEFT JOIN comments c ON p.id = c.post_id
+GROUP BY p.id, u.username ORDER BY b.created_at DESC LIMIT ? OFFSET ?`
+	return s.queryPosts(q, userID, limit, offset)
+}
+
+func (s *SQLiteStore) CountBookmarkedPostsByUser(userID int) (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM bookmarks WHERE user_id = ?", userID).Scan(&count)
+	return count, err
 }
 
 // ---- Comment operations ----

@@ -355,3 +355,116 @@ func TestListPostsFilters(t *testing.T) {
 		t.Fatalf("author=nobody: want [], got %+v", posts)
 	}
 }
+
+func TestTags(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+
+	resp := postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
+		"title": "Go tips", "content": "body", "category_ids": []int{1},
+		"tags": []string{"Go", "backend", "go"}, // dupes (case-insensitive) should collapse
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create post with tags: want 201, got %d", resp.StatusCode)
+	}
+	postID := decode[map[string]int](t, resp)["id"]
+
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), "", nil)
+	page := decode[struct {
+		Post struct {
+			Tags []map[string]any `json:"tags"`
+		} `json:"post"`
+	}](t, resp)
+	if len(page.Post.Tags) != 2 {
+		t.Fatalf("expected 2 distinct tags, got %+v", page.Post.Tags)
+	}
+
+	// Tag autocomplete.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/tags?q=go", "", nil)
+	tags := decode[[]map[string]any](t, resp)
+	if len(tags) != 1 || tags[0]["name"] != "go" {
+		t.Fatalf("tag search 'go': want [go], got %+v", tags)
+	}
+
+	// Filtering the feed by tag.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?tag=backend", "", nil)
+	posts := decode[[]map[string]any](t, resp)
+	if len(posts) != 1 || posts[0]["title"] != "Go tips" {
+		t.Fatalf("posts by tag=backend: want [Go tips], got %+v", posts)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?tag=nonexistent", "", nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 0 {
+		t.Fatalf("posts by unknown tag: want [], got %+v", posts)
+	}
+
+	// Too many tags is rejected.
+	resp = postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
+		"title": "Too many tags", "content": "body", "category_ids": []int{1},
+		"tags": []string{"a", "b", "c", "d", "e", "f"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("6 tags: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestBookmarks(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	bob := registerUser(t, srv.URL, "bob")
+	postID := createPost(t, srv.URL, alice, "Bookmark me")
+
+	// Bookmarking requires auth.
+	resp := postJSON(t, srv.URL+"/api/v1/bookmarks", "", map[string]any{"post_id": postID, "bookmarked": true})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anonymous bookmark: want 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, srv.URL+"/api/v1/bookmarks", bob, map[string]any{"post_id": postID, "bookmarked": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bookmark: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// is_bookmarked reflects the caller, not the post author.
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), bob, nil)
+	page := decode[map[string]any](t, resp)
+	if page["is_bookmarked"] != true {
+		t.Fatalf("bob's view: want is_bookmarked=true, got %v", page["is_bookmarked"])
+	}
+
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), alice, nil)
+	page = decode[map[string]any](t, resp)
+	if page["is_bookmarked"] != false {
+		t.Fatalf("alice's view: want is_bookmarked=false, got %v", page["is_bookmarked"])
+	}
+
+	// Saved filter.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=saved", bob, nil)
+	posts := decode[[]map[string]any](t, resp)
+	if len(posts) != 1 || posts[0]["title"] != "Bookmark me" {
+		t.Fatalf("saved for bob: want [Bookmark me], got %+v", posts)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=saved", alice, nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 0 {
+		t.Fatalf("saved for alice: want [], got %+v", posts)
+	}
+
+	// Toggling off removes it.
+	resp = postJSON(t, srv.URL+"/api/v1/bookmarks", bob, map[string]any{"post_id": postID, "bookmarked": false})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unbookmark: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=saved", bob, nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 0 {
+		t.Fatalf("saved for bob after unbookmark: want [], got %+v", posts)
+	}
+}

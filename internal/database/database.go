@@ -32,6 +32,18 @@ type Store interface {
 	// Category operations
 	GetCategories() ([]*models.Category, error)
 
+	// Tag operations
+	SetPostTags(postID int, tagNames []string) error
+	GetPostsByTag(tagName string, limit, offset int) ([]*models.Post, error)
+	CountPostsByTag(tagName string) (int, error)
+	SearchTags(prefix string, limit int) ([]*models.Tag, error)
+
+	// Bookmark operations
+	ToggleBookmark(postID, userID int, bookmarked bool) error
+	IsBookmarked(postID, userID int) (bool, error)
+	GetBookmarkedPostsByUser(userID, limit, offset int) ([]*models.Post, error)
+	CountBookmarkedPostsByUser(userID int) (int, error)
+
 	// Comment operations
 	CreateComment(postID, userID int, content string) (int, error)
 	GetCommentsByPostID(postID int) ([]*models.Comment, error)
