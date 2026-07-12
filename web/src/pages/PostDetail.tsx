@@ -1,14 +1,18 @@
 import { useState } from 'react'
-import { Bookmark, Loader2, Pencil, Trash2 } from 'lucide-react'
+import { Bookmark, Loader2, Pencil, Pin, Trash2 } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link, useNavigate, useParams } from 'react-router'
 import CommentItem from '../components/CommentItem'
+import ReportButton from '../components/ReportButton'
 import VoteButtons from '../components/VoteButtons'
 import {
+  useAdminDeletePost,
   useCreateComment,
   useDeletePost,
+  useMe,
   usePost,
+  useSetPostPinned,
   useToggleBookmark,
   useVotePost,
 } from '../lib/queries'
@@ -22,10 +26,14 @@ export default function PostDetail() {
 
   const userId = useAuth((s) => s.userId)
   const loggedIn = useAuth((s) => s.refreshToken !== null)
+  const { data: me } = useMe()
+  const isStaff = !!me && (me.is_admin || me.is_moderator)
 
   const { data, isLoading, isError, error } = usePost(postId)
   const vote = useVotePost()
   const deletePost = useDeletePost()
+  const adminDeletePost = useAdminDeletePost()
+  const setPinned = useSetPostPinned()
   const createComment = useCreateComment(postId)
   const toggleBookmark = useToggleBookmark(postId)
 
@@ -77,23 +85,45 @@ export default function PostDetail() {
               {c.name}
             </Link>
           ))}
-          {isOwn && (
+          {(isOwn || isStaff) && (
             <span className="ml-auto flex items-center gap-1">
-              <Link
-                to={`/post/${post.id}/edit`}
-                aria-label="Edit post"
-                className="rounded p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-              >
-                <Pencil size={16} />
-              </Link>
+              {isStaff && (
+                <button
+                  type="button"
+                  onClick={() => setPinned.mutate({ postId: post.id, pinned: !post.pinned })}
+                  disabled={setPinned.isPending}
+                  aria-label={post.pinned ? 'Unpin post' : 'Pin post'}
+                  aria-pressed={post.pinned}
+                  className={`rounded p-1.5 transition disabled:opacity-50 ${
+                    post.pinned
+                      ? 'text-indigo-600 dark:text-indigo-400'
+                      : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  <Pin size={16} fill={post.pinned ? 'currentColor' : 'none'} />
+                </button>
+              )}
+              {isOwn && (
+                <Link
+                  to={`/post/${post.id}/edit`}
+                  aria-label="Edit post"
+                  className="rounded p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                >
+                  <Pencil size={16} />
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   if (window.confirm('Delete this post?')) {
-                    deletePost.mutate(post.id, { onSuccess: () => navigate('/') })
+                    if (isOwn) {
+                      deletePost.mutate(post.id, { onSuccess: () => navigate('/') })
+                    } else {
+                      adminDeletePost.mutate(post.id, { onSuccess: () => navigate('/') })
+                    }
                   }
                 }}
-                disabled={deletePost.isPending}
+                disabled={deletePost.isPending || adminDeletePost.isPending}
                 aria-label="Delete post"
                 className="rounded p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-red-600 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-red-400"
               >
@@ -103,7 +133,10 @@ export default function PostDetail() {
           )}
         </div>
 
-        <h1 className="mt-2 text-2xl font-bold">{post.title}</h1>
+        <h1 className="mt-2 flex items-center gap-2 text-2xl font-bold">
+          {post.pinned && <Pin size={18} className="shrink-0 text-indigo-500" fill="currentColor" />}
+          {post.title}
+        </h1>
 
         {post.image_url && (
           <img
@@ -154,6 +187,7 @@ export default function PostDetail() {
               {data.is_bookmarked ? 'Saved' : 'Save'}
             </button>
           )}
+          {loggedIn && !isOwn && <ReportButton targetType="post" targetId={post.id} className="ml-auto" />}
         </div>
       </article>
 

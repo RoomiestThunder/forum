@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router'
-import { Moon, Sun, PenSquare, LogOut, MessagesSquare, Search } from 'lucide-react'
+import { Moon, Sun, PenSquare, LogOut, MessagesSquare, Search, ShieldCheck } from 'lucide-react'
 import NotificationBell from './NotificationBell'
 import SearchBox from './SearchBox'
 import { logout } from '../lib/api'
+import { useMe } from '../lib/queries'
 import { useNotificationSocket } from '../lib/useNotificationSocket'
 import { useAuth } from '../stores/auth'
 
@@ -32,6 +33,8 @@ function ThemeToggle() {
 export default function Layout() {
   const navigate = useNavigate()
   const username = useAuth((s) => s.username)
+  const { data: me } = useMe()
+  const isStaff = !!me && (me.is_admin || me.is_moderator)
   useNotificationSocket()
 
   const handleLogout = async () => {
@@ -58,6 +61,15 @@ export default function Layout() {
           <ThemeToggle />
           {username ? (
             <>
+              {isStaff && (
+                <Link
+                  to="/admin"
+                  aria-label="Admin panel"
+                  className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                >
+                  <ShieldCheck size={18} />
+                </Link>
+              )}
               <NotificationBell />
               <Link
                 to="/new"

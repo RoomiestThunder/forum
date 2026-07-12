@@ -1,4 +1,4 @@
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, Pin } from 'lucide-react'
 import { Link } from 'react-router'
 import { useVotePost } from '../lib/queries'
 import { timeAgo } from '../lib/time'
@@ -11,6 +11,7 @@ export default function PostCard({ post }: { post: Post }) {
   return (
     <article className="rounded-xl border border-zinc-200 bg-white p-4 transition hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700">
       <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+        {post.pinned && <Pin size={13} className="shrink-0 text-indigo-500" fill="currentColor" />}
         <Link to={`/u/${post.author}`} className="font-medium text-zinc-700 hover:underline dark:text-zinc-300">
           {post.author}
         </Link>

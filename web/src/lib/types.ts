@@ -21,6 +21,7 @@ export interface Post {
   tags: Tag[] | null
   comment_count: number
   image_url?: string
+  pinned: boolean
 }
 
 export interface Comment {
@@ -47,6 +48,8 @@ export interface CurrentUser {
   username: string
   avatar_url: string
   bio: string
+  is_admin: boolean
+  is_moderator: boolean
   created_at: string
 }
 
@@ -78,5 +81,27 @@ export interface Notification {
   type: 'new_comment' | 'new_like'
   payload: NotificationPayload
   read: boolean
+  created_at: string
+}
+
+export interface AdminUser {
+  id: number
+  email: string
+  username: string
+  avatar_url: string
+  is_admin: boolean
+  is_moderator: boolean
+  banned: boolean
+  created_at: string
+}
+
+export interface Report {
+  id: number
+  reporter_id: number
+  reporter_username: string
+  target_type: 'post' | 'comment'
+  target_id: number
+  reason: string
+  status: 'open' | 'resolved'
   created_at: string
 }

@@ -1,15 +1,25 @@
 import { useState } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router'
-import { useDeleteComment, useUpdateComment, useVoteComment } from '../lib/queries'
+import {
+  useAdminDeleteComment,
+  useDeleteComment,
+  useMe,
+  useUpdateComment,
+  useVoteComment,
+} from '../lib/queries'
 import { timeAgo } from '../lib/time'
 import type { Comment } from '../lib/types'
 import { useAuth } from '../stores/auth'
+import ReportButton from './ReportButton'
 import VoteButtons from './VoteButtons'
 
 export default function CommentItem({ comment }: { comment: Comment }) {
   const userId = useAuth((s) => s.userId)
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
   const isOwn = userId === comment.user_id
+  const { data: me } = useMe()
+  const isStaff = !!me && (me.is_admin || me.is_moderator)
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(comment.content)
@@ -17,6 +27,7 @@ export default function CommentItem({ comment }: { comment: Comment }) {
   const vote = useVoteComment(comment.post_id)
   const update = useUpdateComment(comment.post_id)
   const remove = useDeleteComment(comment.post_id)
+  const adminRemove = useAdminDeleteComment(comment.post_id)
 
   const saveEdit = () => {
     const content = draft.trim()
@@ -35,31 +46,39 @@ export default function CommentItem({ comment }: { comment: Comment }) {
         </Link>
         <span aria-hidden>·</span>
         <time dateTime={comment.created_at}>{timeAgo(comment.created_at)}</time>
-        {isOwn && !editing && (
+        {!editing && (isOwn || isStaff) && (
           <span className="ml-auto flex items-center gap-1">
+            {isOwn && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(comment.content)
+                  setEditing(true)
+                }}
+                aria-label="Edit comment"
+                className="rounded p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+              >
+                <Pencil size={14} />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
-                setDraft(comment.content)
-                setEditing(true)
+                if (window.confirm('Delete this comment?')) {
+                  if (isOwn) remove.mutate(comment.id)
+                  else adminRemove.mutate(comment.id)
+                }
               }}
-              aria-label="Edit comment"
-              className="rounded p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-            >
-              <Pencil size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm('Delete this comment?')) remove.mutate(comment.id)
-              }}
-              disabled={remove.isPending}
+              disabled={remove.isPending || adminRemove.isPending}
               aria-label="Delete comment"
               className="rounded p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-red-600 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-red-400"
             >
               <Trash2 size={14} />
             </button>
           </span>
+        )}
+        {!editing && !isOwn && loggedIn && (
+          <ReportButton targetType="comment" targetId={comment.id} className={isStaff ? '' : 'ml-auto'} />
         )}
       </div>
 

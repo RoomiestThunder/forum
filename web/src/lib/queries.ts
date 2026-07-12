@@ -5,7 +5,17 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { api, uploadFile } from './api'
-import type { Category, Comment, CurrentUser, Notification, Post, PublicProfile, Tag } from './types'
+import type {
+  AdminUser,
+  Category,
+  Comment,
+  CurrentUser,
+  Notification,
+  Post,
+  PublicProfile,
+  Report,
+  Tag,
+} from './types'
 import { useAuth } from '../stores/auth'
 
 export const PAGE_SIZE = 10
@@ -269,5 +279,80 @@ export function useToggleBookmark(postId: number) {
       void qc.invalidateQueries({ queryKey: ['post', postId] })
       void qc.invalidateQueries({ queryKey: ['posts'] })
     },
+  })
+}
+
+export function useCreateReport() {
+  return useMutation({
+    mutationFn: (body: { target_type: 'post' | 'comment'; target_id: number; reason: string }) =>
+      api('/reports', { method: 'POST', body: JSON.stringify(body) }),
+  })
+}
+
+export function useAdminUsers(page: number) {
+  return useQuery({
+    queryKey: ['admin', 'users', page],
+    queryFn: () => api<{ users: AdminUser[]; total: number }>(`/admin/users?page=${page}`),
+  })
+}
+
+export function useSetUserRole() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ userId, isAdmin, isModerator }: { userId: number; isAdmin: boolean; isModerator: boolean }) =>
+      api(`/admin/users/${userId}/role`, {
+        method: 'POST',
+        body: JSON.stringify({ is_admin: isAdmin, is_moderator: isModerator }),
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  })
+}
+
+export function useSetUserBanned() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ userId, banned }: { userId: number; banned: boolean }) =>
+      api(`/admin/users/${userId}/ban`, { method: 'POST', body: JSON.stringify({ banned }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  })
+}
+
+export function useAdminReports(status: 'open' | 'resolved') {
+  return useQuery({
+    queryKey: ['admin', 'reports', status],
+    queryFn: () => api<Report[] | null>(`/admin/reports?status=${status}`),
+  })
+}
+
+export function useResolveReport() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api(`/admin/reports/${id}/resolve`, { method: 'POST' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'reports'] }),
+  })
+}
+
+export function useSetPostPinned() {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: ({ postId, pinned }: { postId: number; pinned: boolean }) =>
+      api(`/admin/posts/${postId}/pin`, { method: 'POST', body: JSON.stringify({ pinned }) }),
+    onSuccess: (_data, { postId }) => invalidate(postId),
+  })
+}
+
+export function useAdminDeletePost() {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (postId: number) => api(`/admin/posts/${postId}`, { method: 'DELETE' }),
+    onSuccess: () => invalidate(),
+  })
+}
+
+export function useAdminDeleteComment(postId: number) {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (commentId: number) => api(`/admin/comments/${commentId}`, { method: 'DELETE' }),
+    onSuccess: () => invalidate(postId),
   })
 }

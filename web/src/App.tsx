@@ -1,6 +1,7 @@
 import { Link, Route, Routes } from 'react-router'
 import Layout from './components/Layout'
 import RequireAuth from './components/RequireAuth'
+import Admin from './pages/Admin'
 import Feed from './pages/Feed'
 import Login from './pages/Login'
 import PostDetail from './pages/PostDetail'
@@ -53,6 +54,14 @@ function App() {
           element={
             <RequireAuth>
               <Settings />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="admin"
+          element={
+            <RequireAuth>
+              <Admin />
             </RequireAuth>
           }
         />
