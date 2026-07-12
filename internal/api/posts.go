@@ -230,15 +230,14 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Notify the post author about new comment (best effort)
-	if s.hub != nil {
-		post, err := s.store.GetPost(postID)
-		if err == nil && post.UserID != userID {
-			s.hub.Notify(post.UserID, "new_comment", map[string]interface{}{
-				"post_id":    postID,
-				"comment_id": commentID,
-			})
-		}
+	// Notify the post author about the new comment (best effort).
+	if post, err := s.store.GetPost(postID); err == nil && post.UserID != userID {
+		s.notify(post.UserID, "new_comment", map[string]interface{}{
+			"post_id":    postID,
+			"post_title": post.Title,
+			"comment_id": commentID,
+			"actor":      usernameFromCtx(r),
+		})
 	}
 
 	jsonResponse(w, map[string]int{"id": commentID}, http.StatusCreated)
@@ -262,15 +261,13 @@ func (s *Server) likePost(w http.ResponseWriter, r *http.Request) {
 	if s.cache != nil {
 		_ = s.cache.InvalidatePosts(r.Context())
 	}
-	// Notify post author
-	if s.hub != nil {
-		post, err := s.store.GetPost(body.PostID)
-		if err == nil && post.UserID != userID {
-			s.hub.Notify(post.UserID, "new_like", map[string]interface{}{
-				"post_id": body.PostID,
-				"is_like": body.IsLike,
-			})
-		}
+	// Notify post author (only for likes, not dislikes - nobody wants a ping for that).
+	if post, err := s.store.GetPost(body.PostID); err == nil && post.UserID != userID && body.IsLike {
+		s.notify(post.UserID, "new_like", map[string]interface{}{
+			"post_id":    body.PostID,
+			"post_title": post.Title,
+			"actor":      usernameFromCtx(r),
+		})
 	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 }

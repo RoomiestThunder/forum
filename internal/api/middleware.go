@@ -11,7 +11,10 @@ import (
 
 type contextKey string
 
-const ctxUserID contextKey = "api_user_id"
+const (
+	ctxUserID   contextKey = "api_user_id"
+	ctxUsername contextKey = "api_username"
+)
 
 // requireAuth extracts and validates the JWT Bearer token.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
@@ -28,6 +31,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxUserID, claims.UserID)
+		ctx = context.WithValue(ctx, ctxUsername, claims.Username)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -41,7 +45,9 @@ func (s *Server) optionalAuth(next http.Handler) http.Handler {
 		auth := r.Header.Get("Authorization")
 		if strings.HasPrefix(auth, "Bearer ") {
 			if claims, err := s.jwt.ValidateAccessToken(auth[7:]); err == nil {
-				r = r.WithContext(context.WithValue(r.Context(), ctxUserID, claims.UserID))
+				ctx := context.WithValue(r.Context(), ctxUserID, claims.UserID)
+				ctx = context.WithValue(ctx, ctxUsername, claims.Username)
+				r = r.WithContext(ctx)
 			}
 		}
 		next.ServeHTTP(w, r)
@@ -51,6 +57,11 @@ func (s *Server) optionalAuth(next http.Handler) http.Handler {
 func userIDFromCtx(r *http.Request) int {
 	id, _ := r.Context().Value(ctxUserID).(int)
 	return id
+}
+
+func usernameFromCtx(r *http.Request) string {
+	name, _ := r.Context().Value(ctxUsername).(string)
+	return name
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}, status int) {

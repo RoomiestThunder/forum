@@ -96,6 +96,14 @@ func (s *Server) Mount(root chi.Router) {
 		r.With(s.requireAuth).Post("/bookmarks", s.toggleBookmark)
 		r.Get("/tags", s.searchTags)
 
+		r.Route("/notifications", func(r chi.Router) {
+			r.Use(s.requireAuth)
+			r.Get("/", s.listNotifications)
+			r.Get("/unread-count", s.unreadNotificationCount)
+			r.Post("/read-all", s.markAllNotificationsRead)
+			r.Post("/{id}/read", s.markNotificationRead)
+		})
+
 		r.Get("/search", s.search)
 		r.With(s.requireAuth).Post("/upload", s.upload)
 		r.Get("/categories", s.listCategories)

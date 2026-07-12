@@ -83,10 +83,23 @@ type Upload struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// Notification is the ephemeral envelope pushed over the websocket hub.
 type Notification struct {
 	Type    string      `json:"type"`
 	UserID  int         `json:"user_id"`
 	Payload interface{} `json:"payload"`
+}
+
+// NotificationRecord is a persisted notification row. Payload is stored as
+// raw JSON text so each notification type can carry its own shape without
+// schema changes.
+type NotificationRecord struct {
+	ID        int       `json:"id"`
+	UserID    int       `json:"user_id"`
+	Type      string    `json:"type"`
+	Payload   string    `json:"-"`
+	Read      bool      `json:"read"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type PaginatedPosts struct {

@@ -681,6 +681,56 @@ func (s *PostgresStore) GetUploadsByUser(userID int) ([]*models.Upload, error) {
 	return uploads, nil
 }
 
+// ---- Notification operations ----
+
+func (s *PostgresStore) CreateNotification(userID int, notifType, payload string) (int, error) {
+	var id int
+	err := s.db.QueryRow(
+		"INSERT INTO notifications (user_id, type, payload) VALUES ($1, $2, $3) RETURNING id",
+		userID, notifType, payload,
+	).Scan(&id)
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return id, nil
+}
+
+func (s *PostgresStore) GetNotificationsByUser(userID, limit, offset int) ([]*models.NotificationRecord, error) {
+	rows, err := s.db.Query(
+		"SELECT id, user_id, type, payload, read, created_at FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var notifs []*models.NotificationRecord
+	for rows.Next() {
+		var n models.NotificationRecord
+		if err := rows.Scan(&n.ID, &n.UserID, &n.Type, &n.Payload, &n.Read, &n.CreatedAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		notifs = append(notifs, &n)
+	}
+	return notifs, rows.Err()
+}
+
+func (s *PostgresStore) CountUnreadNotifications(userID int) (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND read = FALSE", userID).Scan(&count)
+	return count, err
+}
+
+func (s *PostgresStore) MarkNotificationRead(id, userID int) error {
+	_, err := s.db.Exec("UPDATE notifications SET read = TRUE WHERE id = $1 AND user_id = $2", id, userID)
+	return err
+}
+
+func (s *PostgresStore) MarkAllNotificationsRead(userID int) error {
+	_, err := s.db.Exec("UPDATE notifications SET read = TRUE WHERE user_id = $1 AND read = FALSE", userID)
+	return err
+}
+
 // ---- Utility ----
 
 func (s *PostgresStore) Close() error { return s.db.Close() }

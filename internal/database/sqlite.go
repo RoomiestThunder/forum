@@ -147,6 +147,15 @@ func sqliteSchema(db *sql.DB) error {
 		FOREIGN KEY(post_id) REFERENCES posts(id),
 		UNIQUE(user_id, post_id)
 	);
+	CREATE TABLE IF NOT EXISTS notifications (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		payload TEXT NOT NULL,
+		read BOOLEAN NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_id) REFERENCES users(id)
+	);
 	`)
 	if err != nil {
 		return err
@@ -783,6 +792,53 @@ func (s *SQLiteStore) GetUploadsByUser(userID int) ([]*models.Upload, error) {
 		uploads = append(uploads, &u)
 	}
 	return uploads, nil
+}
+
+// ---- Notification operations ----
+
+func (s *SQLiteStore) CreateNotification(userID int, notifType, payload string) (int, error) {
+	res, err := s.db.Exec("INSERT INTO notifications (user_id, type, payload) VALUES (?, ?, ?)", userID, notifType, payload)
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	id, _ := res.LastInsertId()
+	return int(id), nil
+}
+
+func (s *SQLiteStore) GetNotificationsByUser(userID, limit, offset int) ([]*models.NotificationRecord, error) {
+	rows, err := s.db.Query(
+		"SELECT id, user_id, type, payload, read, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var notifs []*models.NotificationRecord
+	for rows.Next() {
+		var n models.NotificationRecord
+		if err := rows.Scan(&n.ID, &n.UserID, &n.Type, &n.Payload, &n.Read, &n.CreatedAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		notifs = append(notifs, &n)
+	}
+	return notifs, rows.Err()
+}
+
+func (s *SQLiteStore) CountUnreadNotifications(userID int) (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read = 0", userID).Scan(&count)
+	return count, err
+}
+
+func (s *SQLiteStore) MarkNotificationRead(id, userID int) error {
+	_, err := s.db.Exec("UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?", id, userID)
+	return err
+}
+
+func (s *SQLiteStore) MarkAllNotificationsRead(userID int) error {
+	_, err := s.db.Exec("UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0", userID)
+	return err
 }
 
 // ---- Utility ----

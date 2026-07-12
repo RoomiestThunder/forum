@@ -468,3 +468,102 @@ func TestBookmarks(t *testing.T) {
 		t.Fatalf("saved for bob after unbookmark: want [], got %+v", posts)
 	}
 }
+
+func TestNotifications(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	bob := registerUser(t, srv.URL, "bob")
+	postID := createPost(t, srv.URL, alice, "Notify me")
+
+	// No notifications yet.
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", alice, nil)
+	count := decode[map[string]int](t, resp)
+	if count["count"] != 0 {
+		t.Fatalf("initial unread count: want 0, got %d", count["count"])
+	}
+
+	// Bob comments on Alice's post -> Alice gets notified.
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), bob, map[string]string{"content": "nice post"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create comment: want 201, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Bob likes Alice's post -> Alice gets notified again.
+	resp = postJSON(t, srv.URL+"/api/v1/like/post", bob, map[string]any{"post_id": postID, "is_like": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("like post: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Alice liking her own post must not notify herself.
+	resp = postJSON(t, srv.URL+"/api/v1/like/post", alice, map[string]any{"post_id": postID, "is_like": true})
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", alice, nil)
+	count = decode[map[string]int](t, resp)
+	if count["count"] != 2 {
+		t.Fatalf("unread count after comment+like: want 2, got %d", count["count"])
+	}
+
+	// Bob has no notifications of his own.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", bob, nil)
+	count = decode[map[string]int](t, resp)
+	if count["count"] != 0 {
+		t.Fatalf("bob's unread count: want 0, got %d", count["count"])
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications", alice, nil)
+	notifs := decode[[]map[string]any](t, resp)
+	if len(notifs) != 2 {
+		t.Fatalf("notification list: want 2, got %+v", notifs)
+	}
+	types := map[string]bool{}
+	for _, n := range notifs {
+		types[n["type"].(string)] = true
+		if n["read"] != false {
+			t.Errorf("expected unread notification, got %+v", n)
+		}
+		payload, ok := n["payload"].(map[string]any)
+		if !ok || payload["actor"] != "bob" {
+			t.Errorf("expected actor=bob in payload, got %+v", n["payload"])
+		}
+	}
+	if !types["new_comment"] || !types["new_like"] {
+		t.Fatalf("expected both new_comment and new_like, got %+v", types)
+	}
+
+	// Mark one read.
+	firstID := int(notifs[0]["id"].(float64))
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/notifications/%d/read", srv.URL, firstID), alice, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mark read: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", alice, nil)
+	count = decode[map[string]int](t, resp)
+	if count["count"] != 1 {
+		t.Fatalf("unread count after marking one read: want 1, got %d", count["count"])
+	}
+
+	// Mark all read.
+	resp = postJSON(t, srv.URL+"/api/v1/notifications/read-all", alice, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mark all read: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", alice, nil)
+	count = decode[map[string]int](t, resp)
+	if count["count"] != 0 {
+		t.Fatalf("unread count after marking all read: want 0, got %d", count["count"])
+	}
+
+	// Notifications endpoints require auth.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications", "", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anonymous notifications: want 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}

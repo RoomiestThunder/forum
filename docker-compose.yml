@@ -35,6 +35,7 @@ services:
       - ./migrations/001_initial.up.sql:/docker-entrypoint-initdb.d/001_initial.sql
       - ./migrations/002_user_profiles.up.sql:/docker-entrypoint-initdb.d/002_user_profiles.sql
       - ./migrations/003_tags_bookmarks.up.sql:/docker-entrypoint-initdb.d/003_tags_bookmarks.sql
+      - ./migrations/004_notifications.up.sql:/docker-entrypoint-initdb.d/004_notifications.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U forum"]
       interval: 5s

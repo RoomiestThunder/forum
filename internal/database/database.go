@@ -72,6 +72,13 @@ type Store interface {
 	CreateUpload(userID int, filename, objectKey, contentType string, size int64, url string) (int, error)
 	GetUploadsByUser(userID int) ([]*models.Upload, error)
 
+	// Notification operations
+	CreateNotification(userID int, notifType, payload string) (int, error)
+	GetNotificationsByUser(userID, limit, offset int) ([]*models.NotificationRecord, error)
+	CountUnreadNotifications(userID int) (int, error)
+	MarkNotificationRead(id, userID int) error
+	MarkAllNotificationsRead(userID int) error
+
 	// Utility
 	Close() error
 	Health() error
