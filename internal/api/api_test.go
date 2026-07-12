@@ -612,3 +612,211 @@ func TestSearch(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+func TestFirstUserIsAdmin(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice") // first user ever on this store
+	bob := registerUser(t, srv.URL, "bob")
+
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", alice, nil)
+	me := decode[map[string]any](t, resp)
+	if me["is_admin"] != true {
+		t.Fatalf("first registered user should be admin, got %+v", me)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", bob, nil)
+	me = decode[map[string]any](t, resp)
+	if me["is_admin"] != false {
+		t.Fatalf("second registered user should not be admin, got %+v", me)
+	}
+}
+
+func TestAdminAccessControl(t *testing.T) {
+	srv := newTestServer(t)
+	admin := registerUser(t, srv.URL, "admin")  // first user -> admin
+	mod := registerUser(t, srv.URL, "mod")
+	plain := registerUser(t, srv.URL, "plain")
+
+	// Plain user can't reach any /admin route.
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/users", plain, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("plain user /admin/users: want 403, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", plain, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("plain user /admin/reports: want 403, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Admin promotes "mod" to moderator.
+	var modUserID int
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/users", admin, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin list users: want 200, got %d", resp.StatusCode)
+	}
+	listing := decode[map[string]any](t, resp)
+	for _, u := range listing["users"].([]any) {
+		um := u.(map[string]any)
+		if um["username"] == "mod" {
+			modUserID = int(um["id"].(float64))
+		}
+	}
+	if modUserID == 0 {
+		t.Fatalf("could not find mod user in listing: %+v", listing)
+	}
+
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/users/%d/role", srv.URL, modUserID), admin, map[string]any{
+		"is_admin": false, "is_moderator": true,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("promote to moderator: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Moderator can reach staff routes (reports) but not admin-only ones (users).
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", mod, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("moderator /admin/reports: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/users", mod, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("moderator /admin/users: want 403, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Admin can't strip their own admin flag.
+	var adminUserID int
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", admin, nil)
+	me := decode[map[string]any](t, resp)
+	adminUserID = int(me["id"].(float64))
+
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/users/%d/role", srv.URL, adminUserID), admin, map[string]any{
+		"is_admin": false, "is_moderator": false,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("self-demote: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Admin can't ban themselves.
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/users/%d/ban", srv.URL, adminUserID), admin, map[string]any{"banned": true})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("self-ban: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestBanTakesEffectImmediately(t *testing.T) {
+	srv := newTestServer(t)
+	admin := registerUser(t, srv.URL, "admin")
+	targetToken := registerUser(t, srv.URL, "troll")
+
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", targetToken, nil)
+	me := decode[map[string]any](t, resp)
+	targetID := int(me["id"].(float64))
+
+	// The troll's existing access token still works right up until the ban.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", targetToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pre-ban /me: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/users/%d/ban", srv.URL, targetID), admin, map[string]any{"banned": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("ban: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Same still-unexpired access token must now be rejected - requireAuth
+	// re-checks the ban flag on every request rather than trusting the JWT.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", targetToken, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("post-ban /me with old token: want 403, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Login is also blocked from here on.
+	resp = postJSON(t, srv.URL+"/api/v1/auth/login", "", map[string]string{"login": "troll", "password": "password123"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("login while banned: want 403, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestReportsAndModeration(t *testing.T) {
+	srv := newTestServer(t)
+	admin := registerUser(t, srv.URL, "admin")
+	author := registerUser(t, srv.URL, "author")
+	reporter := registerUser(t, srv.URL, "reporter")
+	postID := createPost(t, srv.URL, author, "Spam post")
+
+	resp := postJSON(t, srv.URL+"/api/v1/reports", reporter, map[string]any{
+		"target_type": "post", "target_id": postID, "reason": "This is spam.",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create report: want 201, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", admin, nil)
+	reports := decode[[]map[string]any](t, resp)
+	if len(reports) != 1 || reports[0]["target_id"] != float64(postID) || reports[0]["status"] != "open" {
+		t.Fatalf("open reports: want 1 open report for post, got %+v", reports)
+	}
+	reportID := int(reports[0]["id"].(float64))
+
+	// Admin pins the post, then deletes it as a moderation action.
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/posts/%d/pin", srv.URL, postID), admin, map[string]any{"pinned": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pin post: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), "", nil)
+	page := decode[map[string]any](t, resp)
+	if page["post"].(map[string]any)["pinned"] != true {
+		t.Fatalf("expected pinned post, got %+v", page)
+	}
+
+	resp = doJSON(t, http.MethodDelete, fmt.Sprintf("%s/api/v1/admin/posts/%d", srv.URL, postID), admin, nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("admin delete post: want 204, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/reports/%d/resolve", srv.URL, reportID), admin, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolve report: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", admin, nil)
+	reports = decode[[]map[string]any](t, resp)
+	if len(reports) != 0 {
+		t.Fatalf("open reports after resolve: want 0, got %+v", reports)
+	}
+}
+
+func TestPinnedPostsSortFirst(t *testing.T) {
+	srv := newTestServer(t)
+	admin := registerUser(t, srv.URL, "admin")
+	createPost(t, srv.URL, admin, "Older post")
+	newestID := createPost(t, srv.URL, admin, "Newest post")
+
+	// Pin the older post; it should still outrank the newer, unpinned one.
+	olderID := newestID - 1
+	resp := postJSON(t, fmt.Sprintf("%s/api/v1/admin/posts/%d/pin", srv.URL, olderID), admin, map[string]any{"pinned": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pin: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts", "", nil)
+	posts := decode[[]map[string]any](t, resp)
+	if len(posts) < 2 || posts[0]["id"] != float64(olderID) {
+		t.Fatalf("expected pinned post first, got %+v", posts)
+	}
+}

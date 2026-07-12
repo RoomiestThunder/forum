@@ -51,10 +51,17 @@ func RunPostgresSchema(db *sql.DB) error {
 // ---- User operations ----
 
 func (s *PostgresStore) CreateUser(email, username, passwordHash string) (int, error) {
+	// The very first account on a fresh install becomes an admin - there's
+	// no other bootstrap mechanism (no seed script, no CLI), so without this
+	// nobody could ever reach the admin panel.
+	var userCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
 	var id int
 	err := s.db.QueryRow(
-		"INSERT INTO users (email, username, password) VALUES ($1, $2, $3) RETURNING id",
-		email, username, passwordHash,
+		"INSERT INTO users (email, username, password, is_admin) VALUES ($1, $2, $3, $4) RETURNING id",
+		email, username, passwordHash, userCount == 0,
 	).Scan(&id)
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)
@@ -62,11 +69,12 @@ func (s *PostgresStore) CreateUser(email, username, passwordHash string) (int, e
 	return id, nil
 }
 
-const pgUserColumns = "id, email, username, password, COALESCE(avatar_url,''), COALESCE(bio,''), created_at"
+const pgUserColumns = "id, email, username, password, COALESCE(avatar_url,''), COALESCE(bio,''), is_admin, is_moderator, banned, created_at"
 
 func scanPgUser(row *sql.Row) (*models.User, error) {
 	var u models.User
-	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
+		&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("User")
 	}
@@ -98,6 +106,91 @@ func (s *PostgresStore) UpdateUserBio(userID int, bio string) error {
 	return err
 }
 
+// ---- Admin operations ----
+
+func (s *PostgresStore) ListUsers(limit, offset int) ([]*models.User, error) {
+	rows, err := s.db.Query("SELECT "+pgUserColumns+" FROM users ORDER BY id ASC LIMIT $1 OFFSET $2", limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var users []*models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
+			&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		users = append(users, &u)
+	}
+	return users, rows.Err()
+}
+
+func (s *PostgresStore) CountUsers() (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	return count, err
+}
+
+func (s *PostgresStore) SetUserRole(userID int, isAdmin, isModerator bool) error {
+	_, err := s.db.Exec("UPDATE users SET is_admin = $1, is_moderator = $2 WHERE id = $3", isAdmin, isModerator, userID)
+	return err
+}
+
+func (s *PostgresStore) SetUserBanned(userID int, banned bool) error {
+	_, err := s.db.Exec("UPDATE users SET banned = $1 WHERE id = $2", banned, userID)
+	return err
+}
+
+func (s *PostgresStore) SetPostPinned(postID int, pinned bool) error {
+	_, err := s.db.Exec("UPDATE posts SET pinned = $1 WHERE id = $2", pinned, postID)
+	return err
+}
+
+func (s *PostgresStore) CreateReport(reporterID int, targetType string, targetID int, reason string) (int, error) {
+	var id int
+	err := s.db.QueryRow(
+		"INSERT INTO reports (reporter_id, target_type, target_id, reason) VALUES ($1, $2, $3, $4) RETURNING id",
+		reporterID, targetType, targetID, reason,
+	).Scan(&id)
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return id, nil
+}
+
+func (s *PostgresStore) ListReports(status string, limit, offset int) ([]*models.Report, error) {
+	rows, err := s.db.Query(`
+		SELECT r.id, r.reporter_id, u.username, r.target_type, r.target_id, r.reason, r.status, r.created_at
+		FROM reports r JOIN users u ON r.reporter_id = u.id
+		WHERE r.status = $1 ORDER BY r.created_at DESC LIMIT $2 OFFSET $3`, status, limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var reports []*models.Report
+	for rows.Next() {
+		var r models.Report
+		if err := rows.Scan(&r.ID, &r.ReporterID, &r.ReporterUsername, &r.TargetType, &r.TargetID,
+			&r.Reason, &r.Status, &r.CreatedAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		reports = append(reports, &r)
+	}
+	return reports, rows.Err()
+}
+
+func (s *PostgresStore) CountOpenReports() (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM reports WHERE status = 'open'").Scan(&count)
+	return count, err
+}
+
+func (s *PostgresStore) ResolveReport(id int) error {
+	_, err := s.db.Exec("UPDATE reports SET status = 'resolved' WHERE id = $1", id)
+	return err
+}
+
 // ---- Post operations ----
 
 func (s *PostgresStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error) {
@@ -119,7 +212,7 @@ func (s *PostgresStore) CreatePost(userID int, title, content string, categoryID
 
 const pgPostBase = `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0) AS likes,
        COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0) AS dislikes,
        COUNT(DISTINCT c.id) AS comment_count
@@ -133,7 +226,7 @@ func (s *PostgresStore) GetPost(id int) (*models.Post, error) {
 	var p models.Post
 	err := s.db.QueryRow(query, id).
 		Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-			&p.ImageURL, &p.Likes, &p.Dislikes, &p.CommentCount)
+			&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("Post")
 	}
@@ -147,7 +240,7 @@ func (s *PostgresStore) GetPost(id int) (*models.Post, error) {
 
 func (s *PostgresStore) GetPosts(limit, offset int) ([]*models.Post, error) {
 	return s.queryPosts(pgPostBase+`
-		GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+		GROUP BY p.id, u.username ORDER BY p.pinned DESC, p.created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 }
 
 func (s *PostgresStore) GetPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
@@ -159,7 +252,7 @@ func (s *PostgresStore) GetPostsByUser(userID, limit, offset int) ([]*models.Pos
 func (s *PostgresStore) GetPostsByCategory(categoryID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -176,7 +269,7 @@ GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`
 func (s *PostgresStore) GetLikedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl2.is_like = TRUE  THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl2.is_like = FALSE THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -216,7 +309,7 @@ func (s *PostgresStore) queryPosts(query string, args ...interface{}) ([]*models
 	for rows.Next() {
 		var p models.Post
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-			&p.ImageURL, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
+			&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
 			rows.Close()
 			return nil, apperrors.DatabaseError(err)
 		}
@@ -277,6 +370,16 @@ func (s *PostgresStore) UpdatePost(id, userID int, title, content string) error 
 }
 
 func (s *PostgresStore) DeletePost(id, userID int) error {
+	return s.deletePost(id, "id = $1 AND user_id = $2", id, userID)
+}
+
+// AdminDeletePost removes a post regardless of ownership - used by
+// moderators/admins acting on a report.
+func (s *PostgresStore) AdminDeletePost(id int) error {
+	return s.deletePost(id, "id = $1", id)
+}
+
+func (s *PostgresStore) deletePost(id int, whereClause string, whereArgs ...interface{}) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return apperrors.DatabaseError(err)
@@ -300,7 +403,7 @@ func (s *PostgresStore) DeletePost(id, userID int) error {
 		}
 	}
 
-	res, err := tx.Exec("DELETE FROM posts WHERE id = $1 AND user_id = $2", id, userID)
+	res, err := tx.Exec("DELETE FROM posts WHERE "+whereClause, whereArgs...)
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
@@ -384,7 +487,7 @@ func (s *PostgresStore) SetPostTags(postID int, tagNames []string) error {
 func (s *PostgresStore) GetPostsByTag(tagName string, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -449,7 +552,7 @@ func (s *PostgresStore) IsBookmarked(postID, userID int) (bool, error) {
 func (s *PostgresStore) GetBookmarkedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -517,8 +620,17 @@ func (s *PostgresStore) UpdateComment(id, userID int, content string) error {
 }
 
 func (s *PostgresStore) DeleteComment(id, userID int) error {
+	return s.deleteComment(id, "id = $1 AND user_id = $2", id, userID)
+}
+
+// AdminDeleteComment removes a comment regardless of ownership.
+func (s *PostgresStore) AdminDeleteComment(id int) error {
+	return s.deleteComment(id, "id = $1", id)
+}
+
+func (s *PostgresStore) deleteComment(id int, whereClause string, whereArgs ...interface{}) error {
 	_, _ = s.db.Exec("DELETE FROM comment_likes WHERE comment_id = $1", id)
-	res, err := s.db.Exec("DELETE FROM comments WHERE id = $1 AND user_id = $2", id, userID)
+	res, err := s.db.Exec("DELETE FROM comments WHERE "+whereClause, whereArgs...)
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
@@ -733,5 +845,5 @@ func (s *PostgresStore) MarkAllNotificationsRead(userID int) error {
 
 // ---- Utility ----
 
-func (s *PostgresStore) Close() error { return s.db.Close() }
+func (s *PostgresStore) Close() error  { return s.db.Close() }
 func (s *PostgresStore) Health() error { return s.db.Ping() }

@@ -95,6 +95,24 @@ func (s *Server) Mount(root chi.Router) {
 
 		r.With(s.requireAuth).Post("/bookmarks", s.toggleBookmark)
 		r.Get("/tags", s.searchTags)
+		r.With(s.requireAuth).Post("/reports", s.createReport)
+
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(s.requireAuth, s.requireStaff)
+
+			r.Get("/reports", s.listReports)
+			r.Post("/reports/{id}/resolve", s.resolveReport)
+			r.Post("/posts/{id}/pin", s.setPostPinned)
+			r.Delete("/posts/{id}", s.adminDeletePost)
+			r.Delete("/comments/{id}", s.adminDeleteComment)
+
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireAdmin)
+				r.Get("/users", s.listUsers)
+				r.Post("/users/{id}/role", s.setUserRole)
+				r.Post("/users/{id}/ban", s.setUserBanned)
+			})
+		})
 
 		r.Route("/notifications", func(r chi.Router) {
 			r.Use(s.requireAuth)

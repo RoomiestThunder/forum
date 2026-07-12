@@ -14,6 +14,19 @@ type Store interface {
 	UpdateUserAvatar(userID int, avatarURL string) error
 	UpdateUserBio(userID int, bio string) error
 
+	// Admin operations
+	ListUsers(limit, offset int) ([]*models.User, error)
+	CountUsers() (int, error)
+	SetUserRole(userID int, isAdmin, isModerator bool) error
+	SetUserBanned(userID int, banned bool) error
+	SetPostPinned(postID int, pinned bool) error
+	AdminDeletePost(id int) error
+	AdminDeleteComment(id int) error
+	CreateReport(reporterID int, targetType string, targetID int, reason string) (int, error)
+	ListReports(status string, limit, offset int) ([]*models.Report, error)
+	CountOpenReports() (int, error)
+	ResolveReport(id int) error
+
 	// Post operations
 	CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error)
 	GetPost(id int) (*models.Post, error)

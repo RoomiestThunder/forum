@@ -82,27 +82,26 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var user interface{ GetID() int }
-	var hash, username string
-	var userID int
-
-	// Try email first, then username
-	if u, err := s.store.GetUserByEmail(req.Login); err == nil {
-		userID, hash, username = u.ID, u.Password, u.Username
-	} else if u, err := s.store.GetUserByUsername(req.Login); err == nil {
-		userID, hash, username = u.ID, u.Password, u.Username
-	} else {
-		_ = user
+	// Try email first, then username.
+	user, err := s.store.GetUserByEmail(req.Login)
+	if err != nil {
+		user, err = s.store.GetUserByUsername(req.Login)
+	}
+	if err != nil {
 		jsonError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		jsonError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	if user.Banned {
+		jsonError(w, "account suspended", http.StatusForbidden)
+		return
+	}
 
-	tokens, err := s.issueTokens(userID, username)
+	tokens, err := s.issueTokens(user.ID, user.Username)
 	if err != nil {
 		jsonError(w, "token generation failed", http.StatusInternalServerError)
 		return
@@ -111,8 +110,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, authResponse{
 		AccessToken:  tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,
-		UserID:       userID,
-		Username:     username,
+		UserID:       user.ID,
+		Username:     user.Username,
 	}, http.StatusOK)
 }
 
@@ -134,6 +133,10 @@ func (s *Server) refreshToken(w http.ResponseWriter, r *http.Request) {
 	user, err := s.store.GetUserByID(rt.UserID)
 	if err != nil {
 		jsonError(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+	if user.Banned {
+		jsonError(w, "account suspended", http.StatusForbidden)
 		return
 	}
 

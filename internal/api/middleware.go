@@ -12,11 +12,16 @@ import (
 type contextKey string
 
 const (
-	ctxUserID   contextKey = "api_user_id"
-	ctxUsername contextKey = "api_username"
+	ctxUserID      contextKey = "api_user_id"
+	ctxUsername    contextKey = "api_username"
+	ctxIsAdmin     contextKey = "api_is_admin"
+	ctxIsModerator contextKey = "api_is_moderator"
 )
 
-// requireAuth extracts and validates the JWT Bearer token.
+// requireAuth extracts and validates the JWT Bearer token, then checks the
+// account hasn't been banned since the token was issued - a JWT alone can't
+// be revoked, so this is what makes a ban actually take effect immediately
+// instead of only at the next login.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
@@ -30,9 +35,47 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			jsonError(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
+		user, err := s.store.GetUserByID(claims.UserID)
+		if err != nil {
+			jsonError(w, "invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+		if user.Banned {
+			jsonError(w, "account suspended", http.StatusForbidden)
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxUserID, claims.UserID)
 		ctx = context.WithValue(ctx, ctxUsername, claims.Username)
+		ctx = context.WithValue(ctx, ctxIsAdmin, user.IsAdmin)
+		ctx = context.WithValue(ctx, ctxIsModerator, user.IsModerator)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// requireAdmin must be chained after requireAuth.
+func (s *Server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isAdmin, _ := r.Context().Value(ctxIsAdmin).(bool)
+		if !isAdmin {
+			jsonError(w, "admin access required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requireStaff must be chained after requireAuth. Admins and moderators both
+// pass; moderators just can't manage other users' roles (that's admin-only,
+// gated separately by requireAdmin on those specific routes).
+func (s *Server) requireStaff(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isAdmin, _ := r.Context().Value(ctxIsAdmin).(bool)
+		isMod, _ := r.Context().Value(ctxIsModerator).(bool)
+		if !isAdmin && !isMod {
+			jsonError(w, "moderator access required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

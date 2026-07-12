@@ -1,11 +1,14 @@
 CREATE TABLE IF NOT EXISTS users (
-    id         SERIAL PRIMARY KEY,
-    email      TEXT UNIQUE NOT NULL,
-    username   TEXT NOT NULL,
-    password   TEXT NOT NULL,
-    avatar_url TEXT NOT NULL DEFAULT '',
-    bio        TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id           SERIAL PRIMARY KEY,
+    email        TEXT UNIQUE NOT NULL,
+    username     TEXT NOT NULL,
+    password     TEXT NOT NULL,
+    avatar_url   TEXT NOT NULL DEFAULT '',
+    bio          TEXT NOT NULL DEFAULT '',
+    is_admin     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_moderator BOOLEAN NOT NULL DEFAULT FALSE,
+    banned       BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -22,6 +25,7 @@ CREATE TABLE IF NOT EXISTS posts (
     title        TEXT,
     content      TEXT,
     image_url    TEXT NOT NULL DEFAULT '',
+    pinned       BOOLEAN NOT NULL DEFAULT FALSE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     search_vector tsvector GENERATED ALWAYS AS (
         setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
@@ -114,3 +118,15 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 CREATE INDEX IF NOT EXISTS notifications_user_idx ON notifications(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS reports (
+    id          SERIAL PRIMARY KEY,
+    reporter_id INTEGER NOT NULL REFERENCES users(id),
+    target_type TEXT NOT NULL CHECK (target_type IN ('post', 'comment')),
+    target_id   INTEGER NOT NULL,
+    reason      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status, created_at DESC);

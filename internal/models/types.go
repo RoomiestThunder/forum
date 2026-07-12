@@ -3,13 +3,16 @@ package models
 import "time"
 
 type User struct {
-	ID        int       `json:"id"`
-	Email     string    `json:"email"`
-	Username  string    `json:"username"`
-	Password  string    `json:"-"`
-	AvatarURL string    `json:"avatar_url"`
-	Bio       string    `json:"bio"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int       `json:"id"`
+	Email       string    `json:"email"`
+	Username    string    `json:"username"`
+	Password    string    `json:"-"`
+	AvatarURL   string    `json:"avatar_url"`
+	Bio         string    `json:"bio"`
+	IsAdmin     bool      `json:"is_admin"`
+	IsModerator bool      `json:"is_moderator"`
+	Banned      bool      `json:"banned"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // PublicProfile is what GET /api/v1/users/{username} returns - a User
@@ -45,6 +48,7 @@ type Post struct {
 	Tags         []Tag      `json:"tags"`
 	CommentCount int        `json:"comment_count"`
 	ImageURL     string     `json:"image_url,omitempty"`
+	Pinned       bool       `json:"pinned"`
 }
 
 type Comment struct {
@@ -100,6 +104,19 @@ type NotificationRecord struct {
 	Payload   string    `json:"-"`
 	Read      bool      `json:"read"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Report is a user-filed flag against a post or comment, queued for
+// moderator/admin review.
+type Report struct {
+	ID               int       `json:"id"`
+	ReporterID       int       `json:"reporter_id"`
+	ReporterUsername string    `json:"reporter_username"`
+	TargetType       string    `json:"target_type"` // "post" or "comment"
+	TargetID         int       `json:"target_id"`
+	Reason           string    `json:"reason"`
+	Status           string    `json:"status"` // "open" or "resolved"
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type PaginatedPosts struct {

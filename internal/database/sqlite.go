@@ -56,6 +56,9 @@ func sqliteSchema(db *sql.DB) error {
 		password TEXT NOT NULL,
 		avatar_url TEXT NOT NULL DEFAULT '',
 		bio TEXT NOT NULL DEFAULT '',
+		is_admin BOOLEAN NOT NULL DEFAULT 0,
+		is_moderator BOOLEAN NOT NULL DEFAULT 0,
+		banned BOOLEAN NOT NULL DEFAULT 0,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE TABLE IF NOT EXISTS categories (
@@ -68,6 +71,7 @@ func sqliteSchema(db *sql.DB) error {
 		title TEXT,
 		content TEXT,
 		image_url TEXT NOT NULL DEFAULT '',
+		pinned BOOLEAN NOT NULL DEFAULT 0,
 		created_at DATETIME,
 		FOREIGN KEY(user_id) REFERENCES users(id)
 	);
@@ -156,6 +160,16 @@ func sqliteSchema(db *sql.DB) error {
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY(user_id) REFERENCES users(id)
 	);
+	CREATE TABLE IF NOT EXISTS reports (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		reporter_id INTEGER NOT NULL,
+		target_type TEXT NOT NULL CHECK (target_type IN ('post', 'comment')),
+		target_id   INTEGER NOT NULL,
+		reason      TEXT NOT NULL,
+		status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(reporter_id) REFERENCES users(id)
+	);
 	`)
 	if err != nil {
 		return err
@@ -175,7 +189,17 @@ func sqliteSchema(db *sql.DB) error {
 // ---- User operations ----
 
 func (s *SQLiteStore) CreateUser(email, username, passwordHash string) (int, error) {
-	res, err := s.db.Exec("INSERT INTO users (email, username, password) VALUES (?, ?, ?)", email, username, passwordHash)
+	// The very first account on a fresh install becomes an admin - there's
+	// no other bootstrap mechanism (no seed script, no CLI), so without this
+	// nobody could ever reach the admin panel.
+	var userCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	res, err := s.db.Exec(
+		"INSERT INTO users (email, username, password, is_admin) VALUES (?, ?, ?, ?)",
+		email, username, passwordHash, userCount == 0,
+	)
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)
 	}
@@ -183,11 +207,12 @@ func (s *SQLiteStore) CreateUser(email, username, passwordHash string) (int, err
 	return int(id), nil
 }
 
-const userColumns = "id, email, username, password, avatar_url, bio, created_at"
+const userColumns = "id, email, username, password, avatar_url, bio, is_admin, is_moderator, banned, created_at"
 
 func scanUser(row *sql.Row) (*models.User, error) {
 	var u models.User
-	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
+		&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("User")
 	}
@@ -219,6 +244,91 @@ func (s *SQLiteStore) UpdateUserBio(userID int, bio string) error {
 	return err
 }
 
+// ---- Admin operations ----
+
+func (s *SQLiteStore) ListUsers(limit, offset int) ([]*models.User, error) {
+	rows, err := s.db.Query("SELECT "+userColumns+" FROM users ORDER BY id ASC LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var users []*models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
+			&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		users = append(users, &u)
+	}
+	return users, rows.Err()
+}
+
+func (s *SQLiteStore) CountUsers() (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	return count, err
+}
+
+func (s *SQLiteStore) SetUserRole(userID int, isAdmin, isModerator bool) error {
+	_, err := s.db.Exec("UPDATE users SET is_admin = ?, is_moderator = ? WHERE id = ?", isAdmin, isModerator, userID)
+	return err
+}
+
+func (s *SQLiteStore) SetUserBanned(userID int, banned bool) error {
+	_, err := s.db.Exec("UPDATE users SET banned = ? WHERE id = ?", banned, userID)
+	return err
+}
+
+func (s *SQLiteStore) SetPostPinned(postID int, pinned bool) error {
+	_, err := s.db.Exec("UPDATE posts SET pinned = ? WHERE id = ?", pinned, postID)
+	return err
+}
+
+func (s *SQLiteStore) CreateReport(reporterID int, targetType string, targetID int, reason string) (int, error) {
+	res, err := s.db.Exec(
+		"INSERT INTO reports (reporter_id, target_type, target_id, reason) VALUES (?, ?, ?, ?)",
+		reporterID, targetType, targetID, reason,
+	)
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	id, _ := res.LastInsertId()
+	return int(id), nil
+}
+
+func (s *SQLiteStore) ListReports(status string, limit, offset int) ([]*models.Report, error) {
+	rows, err := s.db.Query(`
+		SELECT r.id, r.reporter_id, u.username, r.target_type, r.target_id, r.reason, r.status, r.created_at
+		FROM reports r JOIN users u ON r.reporter_id = u.id
+		WHERE r.status = ? ORDER BY r.created_at DESC LIMIT ? OFFSET ?`, status, limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var reports []*models.Report
+	for rows.Next() {
+		var r models.Report
+		if err := rows.Scan(&r.ID, &r.ReporterID, &r.ReporterUsername, &r.TargetType, &r.TargetID,
+			&r.Reason, &r.Status, &r.CreatedAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		reports = append(reports, &r)
+	}
+	return reports, rows.Err()
+}
+
+func (s *SQLiteStore) CountOpenReports() (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM reports WHERE status = 'open'").Scan(&count)
+	return count, err
+}
+
+func (s *SQLiteStore) ResolveReport(id int) error {
+	_, err := s.db.Exec("UPDATE reports SET status = 'resolved' WHERE id = ?", id)
+	return err
+}
+
 // ---- Post operations ----
 
 func (s *SQLiteStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error) {
@@ -239,7 +349,7 @@ func (s *SQLiteStore) CreatePost(userID int, title, content string, categoryIDs 
 // This eliminates the N+1 fillPostMeta pattern.
 const postBaseQuery = `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = 1 THEN 1 ELSE 0 END), 0) AS likes,
        COALESCE(SUM(CASE WHEN pl.is_like = 0 THEN 1 ELSE 0 END), 0) AS dislikes,
        COUNT(DISTINCT c.id) AS comment_count
@@ -264,7 +374,7 @@ func (s *SQLiteStore) GetPost(id int) (*models.Post, error) {
 
 func (s *SQLiteStore) GetPosts(limit, offset int) ([]*models.Post, error) {
 	return s.queryPosts(postBaseQuery+`
-		GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+		GROUP BY p.id, u.username ORDER BY p.pinned DESC, p.created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 }
 
 func (s *SQLiteStore) GetPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
@@ -275,7 +385,7 @@ func (s *SQLiteStore) GetPostsByUser(userID, limit, offset int) ([]*models.Post,
 func (s *SQLiteStore) GetPostsByCategory(categoryID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = 1 THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl.is_like = 0 THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -292,7 +402,7 @@ GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 func (s *SQLiteStore) GetLikedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl2.is_like = 1 THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl2.is_like = 0 THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -308,7 +418,7 @@ GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 func (s *SQLiteStore) scanPost(row *sql.Row) (*models.Post, error) {
 	var p models.Post
 	err := row.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-		&p.ImageURL, &p.Likes, &p.Dislikes, &p.CommentCount)
+		&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount)
 	return &p, err
 }
 
@@ -322,7 +432,7 @@ func (s *SQLiteStore) queryPosts(query string, args ...interface{}) ([]*models.P
 	for rows.Next() {
 		var p models.Post
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-			&p.ImageURL, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
+			&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
 			rows.Close()
 			return nil, apperrors.DatabaseError(err)
 		}
@@ -388,13 +498,26 @@ func (s *SQLiteStore) UpdatePost(id, userID int, title, content string) error {
 }
 
 func (s *SQLiteStore) DeletePost(id, userID int) error {
+	return s.deletePost(id, "id = ? AND user_id = ?", id, userID)
+}
+
+// AdminDeletePost removes a post regardless of ownership - used by
+// moderators/admins acting on a report.
+func (s *SQLiteStore) AdminDeletePost(id int) error {
+	return s.deletePost(id, "id = ?", id)
+}
+
+func (s *SQLiteStore) deletePost(id int, whereClause string, whereArgs ...interface{}) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
 	defer tx.Rollback()
 
-	stmts := []struct{ q string; args []interface{} }{
+	stmts := []struct {
+		q    string
+		args []interface{}
+	}{
 		{"DELETE FROM post_categories WHERE post_id = ?", []interface{}{id}},
 		{"DELETE FROM post_tags WHERE post_id = ?", []interface{}{id}},
 		{"DELETE FROM bookmarks WHERE post_id = ?", []interface{}{id}},
@@ -408,7 +531,7 @@ func (s *SQLiteStore) DeletePost(id, userID int) error {
 		}
 	}
 
-	res, err := tx.Exec("DELETE FROM posts WHERE id = ? AND user_id = ?", id, userID)
+	res, err := tx.Exec("DELETE FROM posts WHERE "+whereClause, whereArgs...)
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
@@ -506,7 +629,7 @@ func (s *SQLiteStore) SetPostTags(postID int, tagNames []string) error {
 func (s *SQLiteStore) GetPostsByTag(tagName string, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = 1 THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl.is_like = 0 THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -571,7 +694,7 @@ func (s *SQLiteStore) IsBookmarked(postID, userID int) (bool, error) {
 func (s *SQLiteStore) GetBookmarkedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''),
+       COALESCE(p.image_url,''), p.pinned,
        COALESCE(SUM(CASE WHEN pl.is_like = 1 THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN pl.is_like = 0 THEN 1 ELSE 0 END), 0),
        COUNT(DISTINCT c.id)
@@ -636,8 +759,17 @@ func (s *SQLiteStore) UpdateComment(id, userID int, content string) error {
 }
 
 func (s *SQLiteStore) DeleteComment(id, userID int) error {
+	return s.deleteComment(id, "id = ? AND user_id = ?", id, userID)
+}
+
+// AdminDeleteComment removes a comment regardless of ownership.
+func (s *SQLiteStore) AdminDeleteComment(id int) error {
+	return s.deleteComment(id, "id = ?", id)
+}
+
+func (s *SQLiteStore) deleteComment(id int, whereClause string, whereArgs ...interface{}) error {
 	_, _ = s.db.Exec("DELETE FROM comment_likes WHERE comment_id = ?", id)
-	res, err := s.db.Exec("DELETE FROM comments WHERE id = ? AND user_id = ?", id, userID)
+	res, err := s.db.Exec("DELETE FROM comments WHERE "+whereClause, whereArgs...)
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
@@ -841,5 +973,5 @@ func (s *SQLiteStore) MarkAllNotificationsRead(userID int) error {
 
 // ---- Utility ----
 
-func (s *SQLiteStore) Close() error { return s.db.Close() }
+func (s *SQLiteStore) Close() error  { return s.db.Close() }
 func (s *SQLiteStore) Health() error { return s.db.Ping() }
