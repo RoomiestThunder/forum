@@ -95,8 +95,8 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "title, content, and at least one category_id required", http.StatusBadRequest)
 		return
 	}
-	if len([]rune(body.Title)) > 20 {
-		jsonError(w, "title must be 20 characters or less", http.StatusBadRequest)
+	if len([]rune(body.Title)) > 100 {
+		jsonError(w, "title must be 100 characters or less", http.StatusBadRequest)
 		return
 	}
 
@@ -127,6 +127,16 @@ func (s *Server) updatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	body.Title = strings.TrimSpace(body.Title)
+	body.Content = strings.TrimSpace(body.Content)
+	if body.Title == "" || body.Content == "" {
+		jsonError(w, "title and content required", http.StatusBadRequest)
+		return
+	}
+	if len([]rune(body.Title)) > 100 {
+		jsonError(w, "title must be 100 characters or less", http.StatusBadRequest)
 		return
 	}
 	userID := userIDFromCtx(r)

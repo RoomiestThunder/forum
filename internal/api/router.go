@@ -69,6 +69,8 @@ func (s *Server) Mount(root chi.Router) {
 			r.With(s.requireAuth).Post("/logout", s.logout)
 		})
 
+		r.With(s.requireAuth).Get("/me", s.me)
+
 		r.Route("/posts", func(r chi.Router) {
 			r.Get("/", s.listPosts)
 			r.With(s.requireAuth).Post("/", s.createPost)
@@ -76,6 +78,11 @@ func (s *Server) Mount(root chi.Router) {
 			r.With(s.requireAuth).Put("/{id}", s.updatePost)
 			r.With(s.requireAuth).Delete("/{id}", s.deletePost)
 			r.With(s.requireAuth).Post("/{id}", s.createComment)
+		})
+
+		r.Route("/comments", func(r chi.Router) {
+			r.With(s.requireAuth).Put("/{id}", s.updateComment)
+			r.With(s.requireAuth).Delete("/{id}", s.deleteComment)
 		})
 
 		r.Route("/like", func(r chi.Router) {

@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -48,14 +50,15 @@ func (m *Manager) GenerateAccessToken(userID int, username string) (string, erro
 	return token.SignedString(m.secret)
 }
 
-// GenerateRefreshToken creates an opaque refresh token (UUID-style, stored in DB).
+// GenerateRefreshToken creates an opaque, cryptographically random refresh
+// token. It carries no claims by design: validity and ownership are checked
+// against the server-side refresh_tokens table.
 func (m *Manager) GenerateRefreshToken() (string, error) {
-	claims := jwt.RegisteredClaims{
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(m.refreshDuration)),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(m.secret)
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 // ValidateAccessToken parses and validates a JWT access token. Returns claims.

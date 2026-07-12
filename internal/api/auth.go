@@ -157,6 +157,16 @@ func (s *Server) refreshToken(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
+// me returns the authenticated user's profile.
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	user, err := s.store.GetUserByID(userIDFromCtx(r))
+	if err != nil {
+		jsonError(w, "user not found", http.StatusNotFound)
+		return
+	}
+	jsonResponse(w, user, http.StatusOK)
+}
+
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r)
 	_ = s.store.DeleteRefreshTokensByUser(userID)

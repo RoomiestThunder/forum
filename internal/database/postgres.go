@@ -220,19 +220,24 @@ func (s *PostgresStore) queryPosts(query string, args ...interface{}) ([]*models
 	if err != nil {
 		return nil, apperrors.DatabaseError(err)
 	}
-	defer rows.Close()
 
 	var posts []*models.Post
 	for rows.Next() {
 		var p models.Post
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
 			&p.ImageURL, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
+			rows.Close()
 			return nil, apperrors.DatabaseError(err)
 		}
-		s.loadCategories(&p)
 		posts = append(posts, &p)
 	}
-	return posts, rows.Err()
+	err = rows.Err()
+	rows.Close() // release the connection before loadCategories requests another one
+
+	for _, p := range posts {
+		s.loadCategories(p)
+	}
+	return posts, err
 }
 
 func (s *PostgresStore) loadCategories(p *models.Post) {
@@ -349,7 +354,9 @@ func (s *PostgresStore) CreateComment(postID, userID int, content string) (int, 
 
 func (s *PostgresStore) GetCommentsByPostID(postID int) ([]*models.Comment, error) {
 	rows, err := s.db.Query(`
-		SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username
+		SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username,
+			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = TRUE),
+			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = FALSE)
 		FROM comments c JOIN users u ON c.user_id = u.id
 		WHERE c.post_id = $1 ORDER BY c.created_at ASC`, postID)
 	if err != nil {
@@ -359,12 +366,12 @@ func (s *PostgresStore) GetCommentsByPostID(postID int) ([]*models.Comment, erro
 	var comments []*models.Comment
 	for rows.Next() {
 		var c models.Comment
-		_ = rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
-		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = TRUE", c.ID).Scan(&c.Likes)
-		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = $1 AND is_like = FALSE", c.ID).Scan(&c.Dislikes)
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author, &c.Likes, &c.Dislikes); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
 		comments = append(comments, &c)
 	}
-	return comments, nil
+	return comments, rows.Err()
 }
 
 func (s *PostgresStore) UpdateComment(id, userID int, content string) error {
@@ -442,7 +449,7 @@ func (s *PostgresStore) CreateRefreshToken(userID int, token string) error {
 
 func (s *PostgresStore) GetRefreshToken(token string) (*models.RefreshToken, error) {
 	var rt models.RefreshToken
-	err := s.db.QueryRow("SELECT id, user_id, token, expires_at FROM refresh_tokens WHERE token = $1", token).
+	err := s.db.QueryRow("SELECT id, user_id, token, expires_at FROM refresh_tokens WHERE token = $1 AND expires_at > NOW()", token).
 		Scan(&rt.ID, &rt.UserID, &rt.Token, &rt.ExpiresAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("RefreshToken")

@@ -35,6 +35,11 @@ func InitSQLite(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if path == ":memory:" {
+		// Each pool connection would otherwise get its own empty in-memory
+		// database, so everything must go through a single connection.
+		db.SetMaxOpenConns(1)
+	}
 	if err := sqliteSchema(db); err != nil {
 		return nil, err
 	}
@@ -288,19 +293,27 @@ func (s *SQLiteStore) queryPosts(query string, args ...interface{}) ([]*models.P
 	if err != nil {
 		return nil, apperrors.DatabaseError(err)
 	}
-	defer rows.Close()
 
 	var posts []*models.Post
 	for rows.Next() {
 		var p models.Post
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
 			&p.ImageURL, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
+			rows.Close()
 			return nil, apperrors.DatabaseError(err)
 		}
-		s.loadCategories(&p)
 		posts = append(posts, &p)
 	}
-	return posts, rows.Err()
+	err = rows.Err()
+	rows.Close() // release the connection before loadCategories opens another one
+
+	// Loading categories per post after the fact (rather than inside the loop
+	// above) avoids holding one connection open while requesting a second,
+	// which would deadlock a pool capped at a single connection.
+	for _, p := range posts {
+		s.loadCategories(p)
+	}
+	return posts, err
 }
 
 // loadCategories fetches categories for a post in one extra query per post
@@ -428,7 +441,9 @@ func (s *SQLiteStore) CreateComment(postID, userID int, content string) (int, er
 
 func (s *SQLiteStore) GetCommentsByPostID(postID int) ([]*models.Comment, error) {
 	rows, err := s.db.Query(`
-		SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username
+		SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username,
+			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = 1),
+			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = 0)
 		FROM comments c JOIN users u ON c.user_id = u.id
 		WHERE c.post_id = ? ORDER BY c.created_at ASC`, postID)
 	if err != nil {
@@ -438,12 +453,12 @@ func (s *SQLiteStore) GetCommentsByPostID(postID int) ([]*models.Comment, error)
 	var comments []*models.Comment
 	for rows.Next() {
 		var c models.Comment
-		_ = rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author)
-		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 1", c.ID).Scan(&c.Likes)
-		_ = s.db.QueryRow("SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND is_like = 0", c.ID).Scan(&c.Dislikes)
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author, &c.Likes, &c.Dislikes); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
 		comments = append(comments, &c)
 	}
-	return comments, nil
+	return comments, rows.Err()
 }
 
 func (s *SQLiteStore) UpdateComment(id, userID int, content string) error {
@@ -515,7 +530,7 @@ func (s *SQLiteStore) CreateRefreshToken(userID int, token string) error {
 
 func (s *SQLiteStore) GetRefreshToken(token string) (*models.RefreshToken, error) {
 	var rt models.RefreshToken
-	err := s.db.QueryRow("SELECT id, user_id, token, expires_at FROM refresh_tokens WHERE token = ?", token).
+	err := s.db.QueryRow("SELECT id, user_id, token, expires_at FROM refresh_tokens WHERE token = ? AND expires_at > ?", token, time.Now()).
 		Scan(&rt.ID, &rt.UserID, &rt.Token, &rt.ExpiresAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("RefreshToken")
