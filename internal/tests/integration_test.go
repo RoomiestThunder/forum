@@ -54,7 +54,7 @@ func setupServer(t *testing.T, store database.Store) *httptest.Server {
 	jwtManager := auth.NewManager(cfg.JWT.Secret, cfg.JWT.AccessTokenDuration, cfg.JWT.RefreshTokenDuration)
 
 	r := chi.NewRouter()
-	apiServer := api.NewServer(store, jwtManager, nil, nil, nil)
+	apiServer := api.NewServer(store, jwtManager, nil, nil, nil, nil, api.Options{BaseURL: "http://localhost"})
 	apiServer.Mount(r)
 
 	return httptest.NewServer(r)

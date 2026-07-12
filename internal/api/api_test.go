@@ -19,6 +19,15 @@ import (
 // newTestServer spins up the API against an in-memory SQLite store.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	srv, _ := newTestServerWithStore(t)
+	return srv
+}
+
+// newTestServerWithStore also hands back the raw store, for tests that need
+// to simulate out-of-band state a real request can't produce directly (e.g.
+// "the verification email arrived and contained this token").
+func newTestServerWithStore(t *testing.T) (*httptest.Server, database.Store) {
+	t.Helper()
 	db, err := database.InitSQLite(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -28,11 +37,11 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 	jwtManager := auth.NewManager("test-secret", 15*time.Minute, 24*time.Hour)
 	r := chi.NewRouter()
-	NewServer(store, jwtManager, nil, nil, nil).Mount(r)
+	NewServer(store, jwtManager, nil, nil, nil, nil, Options{BaseURL: "http://localhost"}).Mount(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, store
 }
 
 func postJSON(t *testing.T, url, token string, payload any) *http.Response {
@@ -633,7 +642,7 @@ func TestFirstUserIsAdmin(t *testing.T) {
 
 func TestAdminAccessControl(t *testing.T) {
 	srv := newTestServer(t)
-	admin := registerUser(t, srv.URL, "admin")  // first user -> admin
+	admin := registerUser(t, srv.URL, "admin") // first user -> admin
 	mod := registerUser(t, srv.URL, "mod")
 	plain := registerUser(t, srv.URL, "plain")
 
@@ -818,5 +827,176 @@ func TestPinnedPostsSortFirst(t *testing.T) {
 	posts := decode[[]map[string]any](t, resp)
 	if len(posts) < 2 || posts[0]["id"] != float64(olderID) {
 		t.Fatalf("expected pinned post first, got %+v", posts)
+	}
+}
+
+func TestAuthProviders(t *testing.T) {
+	srv := newTestServer(t)
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/auth/providers", "", nil)
+	providers := decode[map[string]bool](t, resp)
+	if providers["github"] {
+		t.Fatalf("github should be disabled without client credentials, got %+v", providers)
+	}
+}
+
+func TestGithubLoginUnconfigured(t *testing.T) {
+	srv := newTestServer(t)
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/auth/github", "", nil)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("github login without config: want 503, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestEmailVerification(t *testing.T) {
+	srv, store := newTestServerWithStore(t)
+	token := registerUser(t, srv.URL, "alice")
+
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", token, nil)
+	me := decode[map[string]any](t, resp)
+	if me["email_verified"] != false {
+		t.Fatalf("new user should start unverified, got %+v", me)
+	}
+	userID := int(me["id"].(float64))
+
+	// Simulate the token that would have been emailed.
+	verifyToken := "test-verify-token"
+	if err := store.CreateEmailVerificationToken(userID, verifyToken, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	resp = postJSON(t, srv.URL+"/api/v1/auth/verify-email", "", map[string]string{"token": "wrong-token"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("verify with wrong token: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, srv.URL+"/api/v1/auth/verify-email", "", map[string]string{"token": verifyToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("verify: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", token, nil)
+	me = decode[map[string]any](t, resp)
+	if me["email_verified"] != true {
+		t.Fatalf("expected verified after using token, got %+v", me)
+	}
+
+	// The token is single-use.
+	resp = postJSON(t, srv.URL+"/api/v1/auth/verify-email", "", map[string]string{"token": verifyToken})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("reuse of verify token: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestPasswordReset(t *testing.T) {
+	srv, store := newTestServerWithStore(t)
+	registerUser(t, srv.URL, "alice")
+
+	// forgot-password always returns 200, whether or not the email exists.
+	resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password", "", map[string]string{"email": "alice@example.com"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("forgot-password known email: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = postJSON(t, srv.URL+"/api/v1/auth/forgot-password", "", map[string]string{"email": "nobody@example.com"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("forgot-password unknown email: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	alice, err := store.GetUserByEmail("alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetToken := "test-reset-token"
+	if err := store.CreatePasswordResetToken(alice.ID, resetToken, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Too short a password is rejected before the token is even consumed.
+	resp = postJSON(t, srv.URL+"/api/v1/auth/reset-password", "", map[string]string{
+		"token": resetToken, "new_password": "short",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("reset with short password: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, srv.URL+"/api/v1/auth/reset-password", "", map[string]string{
+		"token": resetToken, "new_password": "newpassword456",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reset password: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Old password no longer works, new one does.
+	resp = postJSON(t, srv.URL+"/api/v1/auth/login", "", map[string]string{"login": "alice", "password": "password123"})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("login with old password: want 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, srv.URL+"/api/v1/auth/login", "", map[string]string{"login": "alice", "password": "newpassword456"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login with new password: want 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// The reset token is single-use.
+	resp = postJSON(t, srv.URL+"/api/v1/auth/reset-password", "", map[string]string{
+		"token": resetToken, "new_password": "anotherpassword",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("reuse of reset token: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestOAuthUserCreationAndLinking(t *testing.T) {
+	_, store := newTestServerWithStore(t)
+
+	// First login for a given GitHub account creates a local user.
+	u1, err := store.FindOrCreateOAuthUser("github", "12345", "octocat@example.com", "octocat", "https://example.com/a.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u1.Username != "octocat" || !u1.EmailVerified {
+		t.Fatalf("expected new oauth user 'octocat' pre-verified, got %+v", u1)
+	}
+
+	// Logging in again with the same provider id returns the same user, not a duplicate.
+	u2, err := store.FindOrCreateOAuthUser("github", "12345", "octocat@example.com", "octocat", "https://example.com/a.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u2.ID != u1.ID {
+		t.Fatalf("expected same user on repeat login, got %d vs %d", u1.ID, u2.ID)
+	}
+
+	// A different GitHub account whose username collides gets de-duplicated.
+	u3, err := store.FindOrCreateOAuthUser("github", "99999", "someoneelse@example.com", "octocat", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u3.Username == "octocat" {
+		t.Fatalf("expected a de-duplicated username, got %q", u3.Username)
+	}
+
+	// A GitHub account whose email matches an existing local account links
+	// to it instead of creating a duplicate.
+	existingID, err := store.CreateUser("linked@example.com", "localuser", "irrelevant-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u4, err := store.FindOrCreateOAuthUser("github", "55555", "linked@example.com", "localuser-github", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u4.ID != existingID {
+		t.Fatalf("expected oauth login to link to existing account %d, got %d", existingID, u4.ID)
 	}
 }

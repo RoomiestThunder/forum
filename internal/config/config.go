@@ -15,6 +15,9 @@ type Config struct {
 	JWT      JWTConfig
 	Redis    RedisConfig
 	MinIO    MinIOConfig
+	SMTP     SMTPConfig
+	GitHub   GitHubConfig
+	BaseURL  string
 }
 
 type ServerConfig struct {
@@ -69,6 +72,23 @@ type MinIOConfig struct {
 	UseSSL          bool
 }
 
+// SMTPConfig configures transactional email. When Host is empty the mailer
+// falls back to logging the message instead of sending it, the same
+// graceful-degradation pattern used for Redis and MinIO.
+type SMTPConfig struct {
+	Host string
+	Port int
+	User string
+	Pass string
+	From string
+}
+
+// GitHubConfig enables "Sign in with GitHub" when both fields are set.
+type GitHubConfig struct {
+	ClientID     string
+	ClientSecret string
+}
+
 func LoadConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -114,6 +134,18 @@ func LoadConfig() *Config {
 			BucketName:      getEnv("MINIO_BUCKET", "forum"),
 			UseSSL:          getEnvBool("MINIO_USE_SSL", false),
 		},
+		SMTP: SMTPConfig{
+			Host: getEnv("SMTP_HOST", ""),
+			Port: getEnvInt("SMTP_PORT", 1025),
+			User: getEnv("SMTP_USER", ""),
+			Pass: getEnv("SMTP_PASS", ""),
+			From: getEnv("SMTP_FROM", "forum@localhost"),
+		},
+		GitHub: GitHubConfig{
+			ClientID:     getEnv("GITHUB_CLIENT_ID", ""),
+			ClientSecret: getEnv("GITHUB_CLIENT_SECRET", ""),
+		},
+		BaseURL: getEnv("BASE_URL", "http://localhost:8080"),
 	}
 }
 

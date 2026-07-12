@@ -19,6 +19,7 @@ import (
 	"forum/internal/cache"
 	"forum/internal/config"
 	"forum/internal/database"
+	"forum/internal/mail"
 	"forum/internal/metrics"
 	appmw "forum/internal/middleware"
 	"forum/internal/storage"
@@ -94,6 +95,14 @@ func main() {
 	defer cancel()
 	go hub.Run(ctx)
 
+	// ---- Mailer (SMTP optional; logs instead of sending when unset) ----
+	mailer := mail.New(cfg.SMTP, logger)
+	if cfg.SMTP.Host != "" {
+		log.Printf("SMTP configured: %s:%d", cfg.SMTP.Host, cfg.SMTP.Port)
+	} else {
+		logger.Warn("SMTP not configured, emails will be logged instead of sent")
+	}
+
 	// ---- HTTP router ----
 	root := chi.NewRouter()
 	root.Use(chimw.RealIP)
@@ -104,7 +113,14 @@ func main() {
 	root.Handle("/metrics", metrics.Handler())
 
 	// REST API v1 (handles /api/v1/*, including the websocket upgrade)
-	apiServer := api.NewServer(store, jwtManager, redisCache, storageClient, hub)
+	apiServer := api.NewServer(store, jwtManager, redisCache, storageClient, hub, mailer, api.Options{
+		BaseURL:            cfg.BaseURL,
+		GitHubClientID:     cfg.GitHub.ClientID,
+		GitHubClientSecret: cfg.GitHub.ClientSecret,
+	})
+	if cfg.GitHub.ClientID != "" {
+		log.Println("GitHub OAuth configured")
+	}
 	apiServer.Mount(root)
 
 	// Everything else is the React SPA (embedded build of web/dist).

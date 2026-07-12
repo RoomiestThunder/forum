@@ -4,15 +4,28 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/oauth2"
+	githuboauth "golang.org/x/oauth2/github"
 
 	"forum/internal/auth"
 	"forum/internal/cache"
 	"forum/internal/database"
+	"forum/internal/mail"
 	"forum/internal/metrics"
 	appmw "forum/internal/middleware"
 	"forum/internal/storage"
 	ws "forum/internal/websocket"
 )
+
+// Options carries the pieces of Server that are optional / config-derived,
+// so adding one doesn't mean touching every existing NewServer call site.
+type Options struct {
+	// BaseURL is used to build links in emails and the OAuth redirect URI.
+	BaseURL string
+	// GitHubClientID/Secret enable "Sign in with GitHub" when both are set.
+	GitHubClientID     string
+	GitHubClientSecret string
+}
 
 type Server struct {
 	store   database.Store
@@ -20,6 +33,12 @@ type Server struct {
 	cache   *cache.Cache
 	storage *storage.Client
 	hub     *ws.Hub
+	mailer  *mail.Mailer
+	baseURL string
+
+	// githubOAuth is nil when GitHub OAuth isn't configured; routes and the
+	// providers endpoint check for that instead of a separate bool.
+	githubOAuth *oauth2.Config
 
 	// rateLimiter is used only when Redis is unavailable, so basic abuse
 	// protection still holds even in cache-degraded mode.
@@ -32,6 +51,8 @@ func NewServer(
 	redisCache *cache.Cache,
 	storageClient *storage.Client,
 	hub *ws.Hub,
+	mailer *mail.Mailer,
+	opts Options,
 ) *Server {
 	s := &Server{
 		store:   store,
@@ -39,9 +60,20 @@ func NewServer(
 		cache:   redisCache,
 		storage: storageClient,
 		hub:     hub,
+		mailer:  mailer,
+		baseURL: opts.BaseURL,
 	}
 	if redisCache == nil {
 		s.rateLimiter = appmw.NewRateLimiter(1, 60) // ~60 req/min per IP, matches the Redis limit
+	}
+	if opts.GitHubClientID != "" && opts.GitHubClientSecret != "" {
+		s.githubOAuth = &oauth2.Config{
+			ClientID:     opts.GitHubClientID,
+			ClientSecret: opts.GitHubClientSecret,
+			Endpoint:     githuboauth.Endpoint,
+			RedirectURL:  opts.BaseURL + "/api/v1/auth/github/callback",
+			Scopes:       []string{"read:user", "user:email"},
+		}
 	}
 	return s
 }
@@ -67,6 +99,15 @@ func (s *Server) Mount(root chi.Router) {
 			r.Post("/login", s.login)
 			r.Post("/refresh", s.refreshToken)
 			r.With(s.requireAuth).Post("/logout", s.logout)
+
+			r.Post("/verify-email", s.verifyEmail)
+			r.With(s.requireAuth).Post("/resend-verification", s.resendVerification)
+			r.Post("/forgot-password", s.forgotPassword)
+			r.Post("/reset-password", s.resetPassword)
+
+			r.Get("/providers", s.authProviders)
+			r.Get("/github", s.githubLogin)
+			r.Get("/github/callback", s.githubCallback)
 		})
 
 		r.With(s.requireAuth).Get("/me", s.me)

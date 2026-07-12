@@ -54,6 +54,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "email or username already taken", http.StatusConflict)
 		return
 	}
+	s.sendVerificationEmail(userID, req.Email)
 
 	tokens, err := s.issueTokens(userID, req.Username)
 	if err != nil {

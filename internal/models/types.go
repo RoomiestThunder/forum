@@ -3,16 +3,17 @@ package models
 import "time"
 
 type User struct {
-	ID          int       `json:"id"`
-	Email       string    `json:"email"`
-	Username    string    `json:"username"`
-	Password    string    `json:"-"`
-	AvatarURL   string    `json:"avatar_url"`
-	Bio         string    `json:"bio"`
-	IsAdmin     bool      `json:"is_admin"`
-	IsModerator bool      `json:"is_moderator"`
-	Banned      bool      `json:"banned"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID            int       `json:"id"`
+	Email         string    `json:"email"`
+	Username      string    `json:"username"`
+	Password      string    `json:"-"`
+	AvatarURL     string    `json:"avatar_url"`
+	Bio           string    `json:"bio"`
+	IsAdmin       bool      `json:"is_admin"`
+	IsModerator   bool      `json:"is_moderator"`
+	Banned        bool      `json:"banned"`
+	EmailVerified bool      `json:"email_verified"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // PublicProfile is what GET /api/v1/users/{username} returns - a User

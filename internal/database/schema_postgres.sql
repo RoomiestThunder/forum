@@ -1,14 +1,15 @@
 CREATE TABLE IF NOT EXISTS users (
-    id           SERIAL PRIMARY KEY,
-    email        TEXT UNIQUE NOT NULL,
-    username     TEXT NOT NULL,
-    password     TEXT NOT NULL,
-    avatar_url   TEXT NOT NULL DEFAULT '',
-    bio          TEXT NOT NULL DEFAULT '',
-    is_admin     BOOLEAN NOT NULL DEFAULT FALSE,
-    is_moderator BOOLEAN NOT NULL DEFAULT FALSE,
-    banned       BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             SERIAL PRIMARY KEY,
+    email          TEXT UNIQUE NOT NULL,
+    username       TEXT NOT NULL,
+    password       TEXT NOT NULL,
+    avatar_url     TEXT NOT NULL DEFAULT '',
+    bio            TEXT NOT NULL DEFAULT '',
+    is_admin       BOOLEAN NOT NULL DEFAULT FALSE,
+    is_moderator   BOOLEAN NOT NULL DEFAULT FALSE,
+    banned         BOOLEAN NOT NULL DEFAULT FALSE,
+    email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -130,3 +131,29 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 
 CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id         SERIAL PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    token      TEXT UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id         SERIAL PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    token      TEXT UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used       BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS oauth_identities (
+    id               SERIAL PRIMARY KEY,
+    user_id          INTEGER NOT NULL REFERENCES users(id),
+    provider         TEXT NOT NULL,
+    provider_user_id TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (provider, provider_user_id)
+);

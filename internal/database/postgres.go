@@ -69,12 +69,12 @@ func (s *PostgresStore) CreateUser(email, username, passwordHash string) (int, e
 	return id, nil
 }
 
-const pgUserColumns = "id, email, username, password, COALESCE(avatar_url,''), COALESCE(bio,''), is_admin, is_moderator, banned, created_at"
+const pgUserColumns = "id, email, username, password, COALESCE(avatar_url,''), COALESCE(bio,''), is_admin, is_moderator, banned, email_verified, created_at"
 
 func scanPgUser(row *sql.Row) (*models.User, error) {
 	var u models.User
 	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
-		&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt)
+		&u.IsAdmin, &u.IsModerator, &u.Banned, &u.EmailVerified, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("User")
 	}
@@ -106,6 +106,113 @@ func (s *PostgresStore) UpdateUserBio(userID int, bio string) error {
 	return err
 }
 
+func (s *PostgresStore) UpdateUserPassword(userID int, passwordHash string) error {
+	_, err := s.db.Exec("UPDATE users SET password = $1 WHERE id = $2", passwordHash, userID)
+	return err
+}
+
+// ---- Account security operations ----
+
+func (s *PostgresStore) SetEmailVerified(userID int) error {
+	_, err := s.db.Exec("UPDATE users SET email_verified = TRUE WHERE id = $1", userID)
+	return err
+}
+
+func (s *PostgresStore) CreateEmailVerificationToken(userID int, token string, expiresAt time.Time) error {
+	_, err := s.db.Exec("INSERT INTO email_verification_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, token, expiresAt)
+	return err
+}
+
+func (s *PostgresStore) ConsumeEmailVerificationToken(token string) (int, error) {
+	var userID int
+	err := s.db.QueryRow(
+		"SELECT user_id FROM email_verification_tokens WHERE token = $1 AND expires_at > NOW()", token,
+	).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return 0, apperrors.NotFoundError("EmailVerificationToken")
+	}
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	_, _ = s.db.Exec("DELETE FROM email_verification_tokens WHERE token = $1", token)
+	return userID, nil
+}
+
+func (s *PostgresStore) CreatePasswordResetToken(userID int, token string, expiresAt time.Time) error {
+	_, err := s.db.Exec("INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, token, expiresAt)
+	return err
+}
+
+func (s *PostgresStore) ConsumePasswordResetToken(token string) (int, error) {
+	var userID int
+	err := s.db.QueryRow(
+		"SELECT user_id FROM password_reset_tokens WHERE token = $1 AND used = FALSE AND expires_at > NOW()", token,
+	).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return 0, apperrors.NotFoundError("PasswordResetToken")
+	}
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	if _, err := s.db.Exec("UPDATE password_reset_tokens SET used = TRUE WHERE token = $1", token); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return userID, nil
+}
+
+func (s *PostgresStore) FindOrCreateOAuthUser(provider, providerUserID, email, preferredUsername, avatarURL string) (*models.User, error) {
+	var userID int
+	err := s.db.QueryRow(
+		"SELECT user_id FROM oauth_identities WHERE provider = $1 AND provider_user_id = $2", provider, providerUserID,
+	).Scan(&userID)
+	if err == nil {
+		return s.GetUserByID(userID)
+	}
+	if err != sql.ErrNoRows {
+		return nil, apperrors.DatabaseError(err)
+	}
+
+	if email == "" {
+		email = fmt.Sprintf("%s-%s@users.noreply.%s", provider, providerUserID, provider)
+	}
+
+	if u, err := s.GetUserByEmail(email); err == nil {
+		if _, err := s.db.Exec(
+			"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, $2, $3)", u.ID, provider, providerUserID,
+		); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		return u, nil
+	}
+
+	username := preferredUsername
+	for i := 0; ; i++ {
+		if i > 0 {
+			username = fmt.Sprintf("%s%d", preferredUsername, i)
+		}
+		if _, err := s.GetUserByUsername(username); err != nil {
+			break
+		}
+	}
+
+	placeholder := "oauth:" + provider + ":" + providerUserID
+	newUserID, err := s.CreateUser(email, username, placeholder)
+	if err != nil {
+		return nil, err
+	}
+	if avatarURL != "" {
+		_ = s.UpdateUserAvatar(newUserID, avatarURL)
+	}
+	_ = s.SetEmailVerified(newUserID)
+
+	if _, err := s.db.Exec(
+		"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, $2, $3)", newUserID, provider, providerUserID,
+	); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return s.GetUserByID(newUserID)
+}
+
 // ---- Admin operations ----
 
 func (s *PostgresStore) ListUsers(limit, offset int) ([]*models.User, error) {
@@ -118,7 +225,7 @@ func (s *PostgresStore) ListUsers(limit, offset int) ([]*models.User, error) {
 	for rows.Next() {
 		var u models.User
 		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
-			&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt); err != nil {
+			&u.IsAdmin, &u.IsModerator, &u.Banned, &u.EmailVerified, &u.CreatedAt); err != nil {
 			return nil, apperrors.DatabaseError(err)
 		}
 		users = append(users, &u)

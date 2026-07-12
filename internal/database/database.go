@@ -1,6 +1,8 @@
 package database
 
 import (
+	"time"
+
 	"forum/internal/models"
 )
 
@@ -13,6 +15,15 @@ type Store interface {
 	GetUserByUsername(username string) (*models.User, error)
 	UpdateUserAvatar(userID int, avatarURL string) error
 	UpdateUserBio(userID int, bio string) error
+	UpdateUserPassword(userID int, passwordHash string) error
+
+	// Account security operations
+	SetEmailVerified(userID int) error
+	CreateEmailVerificationToken(userID int, token string, expiresAt time.Time) error
+	ConsumeEmailVerificationToken(token string) (int, error)
+	CreatePasswordResetToken(userID int, token string, expiresAt time.Time) error
+	ConsumePasswordResetToken(token string) (int, error)
+	FindOrCreateOAuthUser(provider, providerUserID, email, preferredUsername, avatarURL string) (*models.User, error)
 
 	// Admin operations
 	ListUsers(limit, offset int) ([]*models.User, error)

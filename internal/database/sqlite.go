@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -59,6 +60,7 @@ func sqliteSchema(db *sql.DB) error {
 		is_admin BOOLEAN NOT NULL DEFAULT 0,
 		is_moderator BOOLEAN NOT NULL DEFAULT 0,
 		banned BOOLEAN NOT NULL DEFAULT 0,
+		email_verified BOOLEAN NOT NULL DEFAULT 0,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE TABLE IF NOT EXISTS categories (
@@ -170,6 +172,32 @@ func sqliteSchema(db *sql.DB) error {
 		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY(reporter_id) REFERENCES users(id)
 	);
+	CREATE TABLE IF NOT EXISTS email_verification_tokens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		token TEXT UNIQUE NOT NULL,
+		expires_at DATETIME NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_id) REFERENCES users(id)
+	);
+	CREATE TABLE IF NOT EXISTS password_reset_tokens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		token TEXT UNIQUE NOT NULL,
+		expires_at DATETIME NOT NULL,
+		used BOOLEAN NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_id) REFERENCES users(id)
+	);
+	CREATE TABLE IF NOT EXISTS oauth_identities (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		provider TEXT NOT NULL,
+		provider_user_id TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_id) REFERENCES users(id),
+		UNIQUE(provider, provider_user_id)
+	);
 	`)
 	if err != nil {
 		return err
@@ -207,12 +235,12 @@ func (s *SQLiteStore) CreateUser(email, username, passwordHash string) (int, err
 	return int(id), nil
 }
 
-const userColumns = "id, email, username, password, avatar_url, bio, is_admin, is_moderator, banned, created_at"
+const userColumns = "id, email, username, password, avatar_url, bio, is_admin, is_moderator, banned, email_verified, created_at"
 
 func scanUser(row *sql.Row) (*models.User, error) {
 	var u models.User
 	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
-		&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt)
+		&u.IsAdmin, &u.IsModerator, &u.Banned, &u.EmailVerified, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("User")
 	}
@@ -244,6 +272,122 @@ func (s *SQLiteStore) UpdateUserBio(userID int, bio string) error {
 	return err
 }
 
+func (s *SQLiteStore) UpdateUserPassword(userID int, passwordHash string) error {
+	_, err := s.db.Exec("UPDATE users SET password = ? WHERE id = ?", passwordHash, userID)
+	return err
+}
+
+// ---- Account security operations ----
+
+func (s *SQLiteStore) SetEmailVerified(userID int) error {
+	_, err := s.db.Exec("UPDATE users SET email_verified = 1 WHERE id = ?", userID)
+	return err
+}
+
+func (s *SQLiteStore) CreateEmailVerificationToken(userID int, token string, expiresAt time.Time) error {
+	_, err := s.db.Exec("INSERT INTO email_verification_tokens (user_id, token, expires_at) VALUES (?, ?, ?)", userID, token, expiresAt)
+	return err
+}
+
+// ConsumeEmailVerificationToken looks up and deletes the token in one call
+// so it can't be replayed.
+func (s *SQLiteStore) ConsumeEmailVerificationToken(token string) (int, error) {
+	var userID int
+	err := s.db.QueryRow(
+		"SELECT user_id FROM email_verification_tokens WHERE token = ? AND expires_at > ?", token, time.Now(),
+	).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return 0, apperrors.NotFoundError("EmailVerificationToken")
+	}
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	_, _ = s.db.Exec("DELETE FROM email_verification_tokens WHERE token = ?", token)
+	return userID, nil
+}
+
+func (s *SQLiteStore) CreatePasswordResetToken(userID int, token string, expiresAt time.Time) error {
+	_, err := s.db.Exec("INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)", userID, token, expiresAt)
+	return err
+}
+
+// ConsumePasswordResetToken validates a single-use token and marks it used
+// so the same reset link can't be replayed.
+func (s *SQLiteStore) ConsumePasswordResetToken(token string) (int, error) {
+	var userID int
+	err := s.db.QueryRow(
+		"SELECT user_id FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > ?", token, time.Now(),
+	).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return 0, apperrors.NotFoundError("PasswordResetToken")
+	}
+	if err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	if _, err := s.db.Exec("UPDATE password_reset_tokens SET used = 1 WHERE token = ?", token); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return userID, nil
+}
+
+// FindOrCreateOAuthUser links or creates a local account for an OAuth
+// identity: an existing link wins, then an existing account matching the
+// provider's email, then a brand new account with a de-duplicated username.
+func (s *SQLiteStore) FindOrCreateOAuthUser(provider, providerUserID, email, preferredUsername, avatarURL string) (*models.User, error) {
+	var userID int
+	err := s.db.QueryRow(
+		"SELECT user_id FROM oauth_identities WHERE provider = ? AND provider_user_id = ?", provider, providerUserID,
+	).Scan(&userID)
+	if err == nil {
+		return s.GetUserByID(userID)
+	}
+	if err != sql.ErrNoRows {
+		return nil, apperrors.DatabaseError(err)
+	}
+
+	if email == "" {
+		email = fmt.Sprintf("%s-%s@users.noreply.%s", provider, providerUserID, provider)
+	}
+
+	if u, err := s.GetUserByEmail(email); err == nil {
+		if _, err := s.db.Exec(
+			"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES (?, ?, ?)", u.ID, provider, providerUserID,
+		); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		return u, nil
+	}
+
+	username := preferredUsername
+	for i := 0; ; i++ {
+		if i > 0 {
+			username = fmt.Sprintf("%s%d", preferredUsername, i)
+		}
+		if _, err := s.GetUserByUsername(username); err != nil {
+			break
+		}
+	}
+
+	// This can never match a real bcrypt hash, so password login is
+	// impossible for OAuth-only accounts until they set one explicitly.
+	placeholder := "oauth:" + provider + ":" + providerUserID
+	newUserID, err := s.CreateUser(email, username, placeholder)
+	if err != nil {
+		return nil, err
+	}
+	if avatarURL != "" {
+		_ = s.UpdateUserAvatar(newUserID, avatarURL)
+	}
+	_ = s.SetEmailVerified(newUserID) // the provider already verified it
+
+	if _, err := s.db.Exec(
+		"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES (?, ?, ?)", newUserID, provider, providerUserID,
+	); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return s.GetUserByID(newUserID)
+}
+
 // ---- Admin operations ----
 
 func (s *SQLiteStore) ListUsers(limit, offset int) ([]*models.User, error) {
@@ -256,7 +400,7 @@ func (s *SQLiteStore) ListUsers(limit, offset int) ([]*models.User, error) {
 	for rows.Next() {
 		var u models.User
 		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.AvatarURL, &u.Bio,
-			&u.IsAdmin, &u.IsModerator, &u.Banned, &u.CreatedAt); err != nil {
+			&u.IsAdmin, &u.IsModerator, &u.Banned, &u.EmailVerified, &u.CreatedAt); err != nil {
 			return nil, apperrors.DatabaseError(err)
 		}
 		users = append(users, &u)
