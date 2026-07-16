@@ -1,88 +1,60 @@
-# Forum Application - Architecture Documentation
+# Architecture
 
-## Project Overview
+## Overview
 
-Forum is a web-based discussion platform built with Go, featuring user authentication, post management, and community interaction through comments and voting systems.
-
-## Architecture Principles
-
-### 1. Separation of Concerns
-
-The codebase is organized into distinct packages, each responsible for a specific domain:
-
-- **cmd/forum** - Application bootstrap and configuration loading
-- **internal/config** - Configuration management and validation
-- **internal/handlers** - HTTP request handling and business logic
-- **internal/middleware** - Request processing and cross-cutting concerns
-- **internal/database** - Data persistence and database operations
-- **internal/errors** - Error handling and custom error types
-
-### 2. Layered Architecture
+Forum is a JSON API written in Go, paired with a React single-page app. The Go binary is self-contained: it serves `/api/v1/*` directly and serves the SPA's production build (embedded via `go:embed`) for everything else, with an `index.html` fallback for client-side routing. There's no server-rendered HTML and no cookie session state — the SPA talks to the API exclusively over JWT bearer tokens.
 
 ```
-┌─────────────────────────────────────┐
-│      HTTP Handlers Layer            │
-│   (handlers.go, types.go)           │
-├─────────────────────────────────────┤
-│    Middleware & Error Handling      │
-│   (middleware.go, errors.go)        │
-├─────────────────────────────────────┤
-│      Business Logic Layer           │
-│   (Config, Sessions, Validation)    │
-├─────────────────────────────────────┤
-│      Data Persistence Layer         │
-│   (Store Interface, SQLiteStore)    │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│                  React SPA                    │
+│  React Router · TanStack Query · Zustand      │
+│  (served as static assets, or via Vite in dev)│
+└───────────────────┬────────────────────────────┘
+                     │ fetch() with Authorization: Bearer <token>
+                     ▼
+┌──────────────────────────────────────────────┐
+│              chi router (/api/v1)              │
+│   rate limit → auth middleware → handler        │
+├──────────────────────────────────────────────┤
+│         Store interface (database ops)          │
+│         SQLiteStore  │  PostgresStore            │
+└──────────────────────────────────────────────┘
+        │            │            │           │
+        ▼            ▼            ▼           ▼
+   Postgres/     Redis        MinIO        SMTP
+   SQLite      (cache +     (file        (mailer)
+              rate limit)   storage)
 ```
+
+Redis, MinIO, SMTP, and GitHub OAuth are all optional dependencies. Each follows the same degrade-gracefully pattern: if unconfigured or unreachable at startup, the app logs a warning and disables just that feature (cache/rate-limit, uploads, real email delivery, GitHub sign-in) rather than failing to boot.
+
+## Packages
+
+- **cmd/forum** — process bootstrap: loads config, wires the store/cache/storage/mailer/websocket hub into `api.Server`, mounts the SPA handler, starts the HTTP server with graceful shutdown.
+- **internal/config** — environment-variable configuration with defaults and validation.
+- **internal/api** — all `/api/v1/*` handlers, grouped by feature file (`posts.go`, `comments.go`, `profile.go`, `tags.go`, `notifications.go`, `admin.go`, `account.go`, `oauth.go`, ...) plus the chi route tree in `router.go` and auth middleware in `middleware.go`.
+- **internal/database** — the `Store` interface plus `SQLiteStore` and `PostgresStore` implementations. Every query goes through this interface; handlers never touch `database/sql` directly.
+- **internal/auth** — JWT access/refresh token issuance and verification.
+- **internal/mail** — SMTP sending with a logging fallback when unconfigured.
+- **internal/websocket** — a hub that tracks per-user connections and pushes notification events.
+- **internal/cache** — Redis-backed cache-aside for post listings and a token-bucket rate limiter.
+- **internal/storage** — MinIO/S3 client for avatar and post image uploads.
+- **internal/metrics** — Prometheus counters/histograms and the `/metrics` handler.
+- **internal/middleware** — security headers and the in-memory rate limiter fallback.
+- **internal/errors** — typed `AppError` with HTTP status mapping, so handlers return errors instead of writing responses directly.
+- **web/** — the SPA. `lib/api.ts` is the fetch wrapper (attaches the bearer token, retries once after a silent refresh on 401); `lib/queries.ts` holds all TanStack Query hooks; `stores/auth.ts` is the Zustand store persisting tokens to `localStorage`.
 
 ## Design Patterns
 
-### 1. Repository Pattern
+### Repository pattern
 
-The `Store` interface abstracts database operations:
+`database.Store` is a single interface covering every persistence operation (users, posts, comments, tags, bookmarks, notifications, reports, tokens, ...). Handlers depend on the interface, not a concrete driver, which is what makes it possible to run the full API test suite against an in-memory SQLite store with no external services.
 
-```go
-type Store interface {
-    CreateUser(email, username, passwordHash string) (int, error)
-    GetUserByEmail(email string) (*User, error)
-    CreatePost(userID int, title, content string) (int, error)
-    GetPost(id int) (*Post, error)
-    // ... 25+ more methods
-}
-```
+### Graceful degradation for optional infrastructure
 
-**Benefits:**
-- Testability with mock implementations
-- Database-agnostic operations
-- Clear contracts for data operations
+Redis, MinIO, SMTP, and GitHub OAuth are each wired the same way: `New(...)` returns `(nil, err)` or an unconfigured zero-value when the dependency isn't reachable/set, `main.go` logs a warning instead of `log.Fatal`, and the API layer checks for `nil` before using it (e.g. `rateLimit` falls back to an in-memory limiter when `s.cache == nil`; `githubLogin`/`githubCallback` 404 when `s.githubOAuth == nil`).
 
-### 2. Middleware Chain Pattern
-
-Composable middleware for request processing:
-
-```go
-type Handler func(http.ResponseWriter, *http.Request) error
-type Middleware func(Handler) Handler
-
-func Chain(h Handler, middlewares ...Middleware) http.Handler {
-    for i := len(middlewares) - 1; i >= 0; i-- {
-        h = middlewares[i](h)
-    }
-    return h
-}
-```
-
-**Implemented Middleware:**
-- RecoveryMiddleware - panic recovery
-- LoggingMiddleware - structured request logging
-- AuthMiddleware - required authentication
-- RateLimitMiddleware - per-IP rate limiting
-- SecurityHeadersMiddleware - HSTS, CSP, X-Frame-Options
-- RequestIDMiddleware - request tracking
-
-### 3. Custom Error Types
-
-Type-safe error handling with HTTP status mapping:
+### Typed application errors
 
 ```go
 type AppError struct {
@@ -91,248 +63,75 @@ type AppError struct {
     Err     error
     Details string
 }
-
-func (e *AppError) HTTPStatusCode() int {
-    if e.Code >= 100 && e.Code < 600 {
-        return e.Code
-    }
-    return http.StatusInternalServerError
-}
 ```
 
-**Common Error Builders:**
-- ErrNotFound - 404
-- ErrUnauthorized - 401
-- ErrForbidden - 403
-- ErrBadRequest - 400
-- ErrConflict - 409
-- ErrInternalServer - 500
-- ErrTooManyRequests - 429
+Handlers return `*AppError` (via helpers like `apperrors.NotFoundError`, `apperrors.PermissionError`) instead of writing the HTTP response inline, keeping status-code decisions in one place.
 
-### 4. Configuration Management
+### Middleware chain
 
-Type-safe configuration with validation:
+Standard `net/http` middleware composed through chi: `RealIP` → `Recoverer` → `SecurityHeaders` at the router root, then per-route `requireAuth` / `optionalAuth` / `requireStaff` / `requireAdmin` for authorization, and a rate-limit middleware that prefers Redis but falls back to an in-memory bucket.
 
-```go
-type Config struct {
-    Server   ServerConfig
-    Database DatabaseConfig
-    Session  SessionConfig
-    UI       UIConfig
-}
+## Auth Model
 
-func (c *Config) Validate() error {
-    // Comprehensive validation logic
-}
-```
-
-**Features:**
-- Environment variable driven (12-factor app)
-- Default values
-- Comprehensive validation
-- Type-safe access
-
-### 5. Dependency Injection
-
-Configuration passed as parameter (no global state):
-
-```go
-func StartServer(cfg *config.Config) error {
-    // Uses cfg for all configuration needs
-}
-
-func (s *SQLiteStore) GetUserByEmail(email string) (*User, error) {
-    // Self-contained database operations
-}
-```
+- **Registration/login** return a JWT access token (short-lived, 15 min default) and an opaque refresh token (32 bytes of `crypto/rand`, base64-encoded — not a JWT, so two tokens issued in the same instant can't collide).
+- **Refresh** rotates the token: the old refresh token is invalidated and a new pair is issued on every use.
+- **`requireAuth`** re-fetches the user from the database on every request (not just at token issuance) so a ban takes effect immediately instead of waiting for the access token to expire.
+- **First user to register becomes admin.** There's no seed script or CLI for bootstrapping roles.
+- **Password reset / email verification** use single-use tokens stored in dedicated tables, sent via `internal/mail`. `forgotPassword` always returns 200 regardless of whether the email exists, to avoid account enumeration. A successful reset revokes all of the user's refresh tokens.
+- **GitHub OAuth** is a standard authorization-code flow (`golang.org/x/oauth2`) with a state cookie for CSRF protection. On callback, the server finds-or-creates a user by GitHub account and redirects to the SPA with the token pair in the URL fragment (not JSON — a `fetch()` call can't follow a 302 to an external OAuth provider and get the tokens back).
 
 ## Data Model
 
-### Entity Relationship Diagram
-
 ```
-users (1) ──── (N) posts
-         ├──────────────(N) comments
-         ├──────────────(N) post_likes
-         └──────────────(N) comment_likes
+users (1) ──┬── (N) posts
+            ├── (N) comments
+            ├── (N) post_likes / comment_likes
+            ├── (N) bookmarks
+            ├── (N) notifications
+            ├── (N) reports (as reporter)
+            ├── (N) oauth_identities
+            └── (N) refresh_tokens / email_verification_tokens / password_reset_tokens
 
-posts (1) ────── (N) post_categories
-categories (1) ──
+posts (1) ──┬── (N) comments
+            ├── (N) post_categories ── (1) categories
+            ├── (N) post_tags ── (1) tags
+            └── (N) bookmarks
 
-comments (1) ─────── (N) comment_likes
-```
-
-### Database Tables
-
-| Table | Purpose | Key Fields |
-|-------|---------|-----------|
-| users | User accounts | id, email, username, password_hash |
-| posts | Forum posts | id, user_id, title, content, created_at |
-| comments | Post comments | id, post_id, user_id, content, created_at |
-| categories | Post categories | id, name |
-| post_categories | Post-Category mapping | post_id, category_id |
-| post_likes | Post votes | user_id, post_id, is_like |
-| comment_likes | Comment votes | user_id, comment_id, is_like |
-| sessions | User sessions | id, user_id, uuid, expires |
-
-## Security Architecture
-
-### Authentication & Authorization
-
-1. **Registration** - Email and username uniqueness validation
-2. **Login** - Bcrypt password verification
-3. **Sessions** - UUID-based tokens with 24-hour expiration
-4. **Authorization** - Owner-only access for edit/delete operations
-
-### Security Controls
-
-- **Input Validation** - All user inputs validated before processing
-- **SQL Injection Prevention** - Prepared statements with parameterized queries
-- **XSS Protection** - Template auto-escaping via html/template
-- **CSRF Protection** - Form method validation
-- **Rate Limiting** - Token bucket algorithm per IP
-- **Password Security** - Bcrypt hashing (cost: 12)
-- **Session Management** - Single active session per user
-
-## API Endpoint Structure
-
-### Authentication Endpoints
-- `GET/POST /register` - User registration
-- `GET/POST /login` - User authentication
-- `GET /logout` - Session termination
-
-### Post Management
-- `GET /` - Homepage with pagination
-- `GET/POST /create_post` - Create new post
-- `GET /post/{id}` - View post with comments
-- `GET/PUT /edit_post?id={id}` - Edit post
-- `DELETE /delete_post?id={id}` - Delete post
-- `GET /like_post?id={id}&like=1/0` - Vote on post
-
-### Comment Management
-- `POST /post/{id}` - Add comment to post
-- `GET/PUT /edit_comment?id={id}&post={post_id}` - Edit comment
-- `DELETE /delete_comment?id={id}&post={post_id}` - Delete comment
-- `GET /like_comment?id={id}&post={post_id}&like=1/0` - Vote on comment
-
-### Filtering & Pagination
-- `GET /?category={id}` - Filter by category
-- `GET /?filter=myposts` - User's own posts
-- `GET /?filter=liked` - User's liked posts
-- `GET /?page={num}` - Pagination
-
-## Testing Strategy
-
-### Test Coverage
-
-| Package | Tests | Type |
-|---------|-------|------|
-| config | 13 | Unit tests for configuration |
-| errors | 14 | Unit tests for error handling |
-| middleware | 5 | Unit tests for middleware |
-| handlers | 20 | Integration tests for endpoints |
-| database | 18 | Integration tests for persistence |
-| **Total** | **70** | |
-
-### Test Types
-
-1. **Unit Tests** - Individual component testing
-   - Configuration validation
-   - Error type behavior
-   - Utility functions
-
-2. **Integration Tests** - End-to-end functionality
-   - HTTP endpoint behavior
-   - Database operations
-   - Error handling in context
-
-3. **Edge Cases**
-   - Missing parameters
-   - Invalid input
-   - Non-existent resources
-   - Unauthorized access
-
-## Performance Considerations
-
-### Optimization Strategies
-
-1. **Database Connection Pooling**
-   - Max open connections: 25
-   - Max idle connections: 5
-   - Connection max lifetime: 5 minutes
-
-2. **Pagination**
-   - Default page size: 5 posts
-   - Configurable pagination size
-   - Efficient LIMIT/OFFSET queries
-
-3. **Rate Limiting**
-   - Token bucket algorithm
-   - Per-IP tracking
-   - Configurable request limits
-
-4. **Caching**
-   - Server-side rendered templates
-   - HTTP cache headers for static assets
-   - Session caching via in-memory storage
-
-## Deployment Architecture
-
-### Docker Support
-
-Multi-stage build for optimized image:
-
-```dockerfile
-FROM golang:1.24.2-alpine AS builder
-# Build stage
-
-FROM alpine:latest
-# Runtime stage with minimal footprint
+comments (1) ── (N) comment_likes
 ```
 
-### Configuration for Production
+| Table | Purpose |
+|---|---|
+| users | accounts — credentials, bio, avatar, role flags, ban state |
+| posts | title, markdown content, optional image, pinned flag |
+| comments | markdown content on a post |
+| categories, post_categories | fixed post categories |
+| tags, post_tags | free-form tags with autocomplete search |
+| bookmarks | per-user saved posts |
+| post_likes, comment_likes | up/down votes |
+| notifications | persisted events (reply, like, mention, ...) surfaced via the bell + WebSocket push |
+| reports | user-filed reports on a post or comment, with resolution state |
+| refresh_tokens | opaque JWT refresh tokens |
+| email_verification_tokens, password_reset_tokens | single-use account-security tokens |
+| oauth_identities | provider + provider user id linked to a local account |
 
-- Environment-based configuration
-- SQLite database (single-file deployment)
-- Docker Compose orchestration
-- Health checks and container restart policies
+Both `internal/database/schema_postgres.sql` (embedded, used by integration tests) and the numbered files in `migrations/` (mounted as Postgres init scripts in Docker Compose) describe this schema — they're kept in sync by hand whenever a migration is added.
 
-## Code Quality Metrics
+## Real-time Notifications
 
-- **Test Coverage**: 70+ tests, all passing
-- **Code Style**: go fmt compliant
-- **Static Analysis**: go vet clean
-- **Code Organization**: 10 Go files, clear separation
-- **Documentation**: Inline comments, API documentation
+`internal/websocket` runs a hub goroutine that tracks live connections per user ID. When an action creates a notification (someone replies to your post, likes your comment, etc.), the handler persists it via `Store` and pushes it to the hub, which forwards it to any open WebSocket connection for that user. The SPA connects via `GET /api/v1/ws?token=...` and updates the notification bell without polling.
 
-## Dependencies
+## Testing
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| github.com/mattn/go-sqlite3 | v1.14.29 | SQLite driver |
-| golang.org/x/crypto | v0.40.0 | Bcrypt hashing |
-| github.com/google/uuid | v1.6.0 | Session token generation |
+- **`internal/api`** — handler-level tests against an in-memory SQLite store (`:memory:`, `SetMaxOpenConns(1)` so every test connection shares the same database), covering auth, CRUD, filters, moderation, and account-security flows end to end through real HTTP requests.
+- **`internal/config`**, **`internal/errors`**, **`internal/middleware`** — focused unit tests.
+- **`internal/tests`** — integration tests that spin up real PostgreSQL via testcontainers, for the code paths that differ between the SQLite and Postgres store implementations (full-text search, in particular).
+- **web/** — `oxlint` + `tsc -b` catch type and lint errors; no component test suite yet.
 
-## Future Enhancements
+Run everything with `go test -short ./...` (SQLite tests only, fast) or add `./internal/tests/...` for the Postgres integration tests (requires Docker).
 
-1. **Features**
-   - Direct messaging between users
-   - Post search and advanced filtering
-   - User profile customization
-   - Admin dashboard
+## Deployment
 
-2. **Technical**
-   - GraphQL API endpoint
-   - WebSocket for real-time updates
-   - Full-text search (FTS5)
-   - Horizontal scaling with distributed sessions
+`Dockerfile` is a three-stage build: a Node stage installs dependencies and runs `npm run build` to produce `web/dist`, a Go stage copies that into the build context so `go:embed` picks it up and compiles a static binary, and a minimal Alpine runtime stage just copies the binary. `docker-compose.yml` wires up Postgres, Redis, MinIO, Mailpit (dev SMTP inbox), Prometheus, and Grafana alongside the app.
 
-3. **Operations**
-   - Metrics and monitoring (Prometheus)
-   - Structured logging (JSON format)
-   - Database migrations system
-   - CI/CD pipeline automation
-
-## Conclusion
-
-The Forum application follows Go best practices with clear separation of concerns, testable components, and secure design patterns. The modular architecture allows for easy extension and maintenance while maintaining code quality and security.
+CI (`.github/workflows/ci.yml`) mirrors that shape: a `frontend` job builds and lints the SPA and uploads `web/dist` as an artifact; a `test` job downloads it, runs `golangci-lint` and `go test -race` against Postgres+Redis service containers, then builds the Go binary with the real embedded frontend; a `docker` job (main branch only) builds and pushes the same multi-stage image to GHCR.
