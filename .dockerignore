@@ -1,0 +1,6 @@
+.git
+.github
+*.md
+forum.db
+web/node_modules
+web/dist

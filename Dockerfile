@@ -1,3 +1,15 @@
+# ── Frontend build ───────────────────────────────────
+FROM node:24-alpine AS frontend
+
+WORKDIR /app/web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm install --no-audit --no-fund
+
+COPY web/ ./
+RUN npm run build
+
+# ── Go build ─────────────────────────────────────────
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
@@ -9,6 +21,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+COPY --from=frontend /app/web/dist ./web/dist
 
 ENV CGO_ENABLED=1
 RUN go build -o forum -ldflags="-s -w" -a -installsuffix cgo ./cmd/forum
@@ -23,8 +36,6 @@ RUN apk add --no-cache ca-certificates sqlite-libs tzdata && \
     adduser -D -u 1000 -G app app
 
 COPY --from=builder /app/forum .
-COPY templates/ ./templates/
-COPY static/ ./static/
 
 RUN chown -R app:app /app
 USER app
