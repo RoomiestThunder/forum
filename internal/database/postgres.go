@@ -96,6 +96,28 @@ func (s *PostgresStore) GetUserByUsername(username string) (*models.User, error)
 	return scanPgUser(s.db.QueryRow("SELECT "+pgUserColumns+" FROM users WHERE LOWER(username) = LOWER($1)", username))
 }
 
+// SearchUsers powers @mention autocomplete - a case-insensitive username
+// prefix match.
+func (s *PostgresStore) SearchUsers(prefix string, limit int) ([]*models.UserSummary, error) {
+	rows, err := s.db.Query(
+		"SELECT id, username, avatar_url FROM users WHERE username ILIKE $1 ORDER BY username LIMIT $2",
+		prefix+"%", limit,
+	)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var users []*models.UserSummary
+	for rows.Next() {
+		var u models.UserSummary
+		if err := rows.Scan(&u.ID, &u.Username, &u.AvatarURL); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		users = append(users, &u)
+	}
+	return users, rows.Err()
+}
+
 func (s *PostgresStore) UpdateUserAvatar(userID int, avatarURL string) error {
 	_, err := s.db.Exec("UPDATE users SET avatar_url = $1 WHERE id = $2", avatarURL, userID)
 	return err

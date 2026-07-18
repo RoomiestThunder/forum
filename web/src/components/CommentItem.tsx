@@ -11,6 +11,8 @@ import {
 import { timeAgo } from '../lib/time'
 import type { Comment } from '../lib/types'
 import { useAuth } from '../stores/auth'
+import MentionText from './MentionText'
+import MentionTextarea from './MentionTextarea'
 import ReportButton from './ReportButton'
 import VoteButtons from './VoteButtons'
 
@@ -84,9 +86,9 @@ export default function CommentItem({ comment }: { comment: Comment }) {
 
       {editing ? (
         <div className="mt-2">
-          <textarea
+          <MentionTextarea
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={setDraft}
             maxLength={500}
             rows={3}
             className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-950"
@@ -110,7 +112,9 @@ export default function CommentItem({ comment }: { comment: Comment }) {
           </div>
         </div>
       ) : (
-        <p className="mt-1.5 whitespace-pre-wrap text-sm">{comment.content}</p>
+        <p className="mt-1.5 whitespace-pre-wrap text-sm">
+          <MentionText text={comment.content} />
+        </p>
       )}
 
       {!editing && (

@@ -32,6 +32,22 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
+// searchUsers powers @mention autocomplete - a short prefix match on
+// username, capped well below anything worth paginating.
+func (s *Server) searchUsers(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		jsonResponse(w, []models.UserSummary{}, http.StatusOK)
+		return
+	}
+	users, err := s.store.SearchUsers(q, 6)
+	if err != nil {
+		jsonError(w, "search failed", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, users, http.StatusOK)
+}
+
 // updateBio updates the authenticated user's bio.
 func (s *Server) updateBio(w http.ResponseWriter, r *http.Request) {
 	var body struct {

@@ -4,6 +4,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link, useNavigate, useParams } from 'react-router'
 import CommentItem from '../components/CommentItem'
+import MentionTextarea from '../components/MentionTextarea'
 import ReportButton from '../components/ReportButton'
 import VoteButtons from '../components/VoteButtons'
 import {
@@ -236,9 +237,9 @@ export default function PostDetail() {
                 {createComment.error.message}
               </p>
             )}
-            <textarea
+            <MentionTextarea
               value={commentDraft}
-              onChange={(e) => setCommentDraft(e.target.value)}
+              onChange={setCommentDraft}
               placeholder="Write a comment…"
               maxLength={500}
               rows={3}

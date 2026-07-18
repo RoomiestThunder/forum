@@ -260,10 +260,31 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Notify the post author about the new comment (best effort).
-	if post, err := s.store.GetPost(postID); err == nil && post.UserID != userID {
+	post, postErr := s.store.GetPost(postID)
+	if postErr == nil && post.UserID != userID {
 		s.notify(post.UserID, "new_comment", map[string]interface{}{
 			"post_id":    postID,
 			"post_title": post.Title,
+			"comment_id": commentID,
+			"actor":      usernameFromCtx(r),
+		})
+	}
+
+	// Notify @mentioned users too - a distinct signal from "someone
+	// commented on your post", so no dedup against the notification above
+	// even if the mentioned user happens to be the post author.
+	postTitle := ""
+	if postErr == nil {
+		postTitle = post.Title
+	}
+	for _, username := range extractMentions(body.Content) {
+		mentioned, err := s.store.GetUserByUsername(username)
+		if err != nil || mentioned.ID == userID {
+			continue
+		}
+		s.notify(mentioned.ID, "new_mention", map[string]interface{}{
+			"post_id":    postID,
+			"post_title": postTitle,
 			"comment_id": commentID,
 			"actor":      usernameFromCtx(r),
 		})

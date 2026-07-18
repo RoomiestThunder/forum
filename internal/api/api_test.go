@@ -1176,3 +1176,62 @@ func TestPostDrafts(t *testing.T) {
 		t.Fatalf("published post missing from public feed: %+v", posts)
 	}
 }
+
+func TestMentions(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	bob := registerUser(t, srv.URL, "bob")
+	carol := registerUser(t, srv.URL, "carol")
+	postID := createPost(t, srv.URL, alice, "Discussion thread")
+
+	// Username search for autocomplete.
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/v1/users/search?q=ca", "", nil)
+	results := decode[[]map[string]any](t, resp)
+	if len(results) != 1 || results[0]["username"] != "carol" {
+		t.Fatalf("search users q=ca: want [carol], got %+v", results)
+	}
+
+	// Bob comments mentioning carol (and himself, which should be ignored)
+	// on alice's post.
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), bob, map[string]string{
+		"content": "hey @carol and @bob, check this out @carol",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create comment: want 201, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// Carol gets exactly one mention notification (deduped), not two.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications", carol, nil)
+	notifs := decode[[]map[string]any](t, resp)
+	mentionCount := 0
+	for _, n := range notifs {
+		if n["type"] == "new_mention" {
+			mentionCount++
+			payload, _ := n["payload"].(map[string]any)
+			if payload["actor"] != "bob" {
+				t.Errorf("expected actor=bob, got %+v", n["payload"])
+			}
+		}
+	}
+	if mentionCount != 1 {
+		t.Fatalf("carol's mention notifications: want 1, got %d (%+v)", mentionCount, notifs)
+	}
+
+	// Bob mentioning himself doesn't self-notify.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", bob, nil)
+	count := decode[map[string]int](t, resp)
+	if count["count"] != 0 {
+		t.Fatalf("bob's unread count (self-mention): want 0, got %d", count["count"])
+	}
+
+	// Alice, the post author, gets both a new_comment and (since she wasn't
+	// mentioned) no new_mention.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications", alice, nil)
+	notifs = decode[[]map[string]any](t, resp)
+	for _, n := range notifs {
+		if n["type"] == "new_mention" {
+			t.Fatalf("alice was not mentioned but got a mention notification: %+v", n)
+		}
+	}
+}

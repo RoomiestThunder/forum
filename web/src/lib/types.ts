@@ -3,6 +3,12 @@ export interface Category {
   name: string
 }
 
+export interface UserSummary {
+  id: number
+  username: string
+  avatar_url: string
+}
+
 export interface Tag {
   id: number
   name: string
@@ -76,11 +82,18 @@ export interface NewLikePayload {
   actor: string
 }
 
-export type NotificationPayload = NewCommentPayload | NewLikePayload
+export interface NewMentionPayload {
+  post_id: number
+  post_title: string
+  comment_id: number
+  actor: string
+}
+
+export type NotificationPayload = NewCommentPayload | NewLikePayload | NewMentionPayload
 
 export interface Notification {
   id: number
-  type: 'new_comment' | 'new_like'
+  type: 'new_comment' | 'new_like' | 'new_mention'
   payload: NotificationPayload
   read: boolean
   created_at: string

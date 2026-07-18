@@ -26,6 +26,15 @@ type PublicProfile struct {
 	PostCount int       `json:"post_count"`
 }
 
+// UserSummary is the minimal public shape used for @mention autocomplete
+// and similar lightweight lookups where a full User/PublicProfile would
+// expose more than needed.
+type UserSummary struct {
+	ID        int    `json:"id"`
+	Username  string `json:"username"`
+	AvatarURL string `json:"avatar_url"`
+}
+
 type Category struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`

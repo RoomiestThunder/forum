@@ -13,6 +13,7 @@ type Store interface {
 	GetUserByEmail(email string) (*models.User, error)
 	GetUserByID(id int) (*models.User, error)
 	GetUserByUsername(username string) (*models.User, error)
+	SearchUsers(prefix string, limit int) ([]*models.UserSummary, error)
 	UpdateUserAvatar(userID int, avatarURL string) error
 	UpdateUserBio(userID int, bio string) error
 	UpdateUserPassword(userID int, passwordHash string) error

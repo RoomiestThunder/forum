@@ -277,6 +277,28 @@ func (s *SQLiteStore) GetUserByUsername(username string) (*models.User, error) {
 	return scanUser(s.db.QueryRow("SELECT "+userColumns+" FROM users WHERE LOWER(username) = LOWER(?)", username))
 }
 
+// SearchUsers powers @mention autocomplete - a case-insensitive username
+// prefix match. LIKE is case-insensitive for ASCII in SQLite by default.
+func (s *SQLiteStore) SearchUsers(prefix string, limit int) ([]*models.UserSummary, error) {
+	rows, err := s.db.Query(
+		"SELECT id, username, avatar_url FROM users WHERE username LIKE ? ORDER BY username LIMIT ?",
+		prefix+"%", limit,
+	)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var users []*models.UserSummary
+	for rows.Next() {
+		var u models.UserSummary
+		if err := rows.Scan(&u.ID, &u.Username, &u.AvatarURL); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		users = append(users, &u)
+	}
+	return users, rows.Err()
+}
+
 func (s *SQLiteStore) UpdateUserAvatar(userID int, avatarURL string) error {
 	_, err := s.db.Exec("UPDATE users SET avatar_url = ? WHERE id = ?", avatarURL, userID)
 	return err

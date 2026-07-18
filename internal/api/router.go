@@ -113,6 +113,7 @@ func (s *Server) Mount(root chi.Router) {
 		r.With(s.requireAuth).Get("/me", s.me)
 		r.With(s.requireAuth).Put("/me/bio", s.updateBio)
 		r.With(s.requireAuth).Post("/me/avatar", s.uploadAvatar)
+		r.Get("/users/search", s.searchUsers)
 		r.Get("/users/{username}", s.profile)
 
 		r.Route("/posts", func(r chi.Router) {

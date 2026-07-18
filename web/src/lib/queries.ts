@@ -17,6 +17,7 @@ import type {
   PublicProfile,
   Report,
   Tag,
+  UserSummary,
 } from './types'
 import { useAuth } from '../stores/auth'
 
@@ -59,6 +60,15 @@ export function useTagSuggestions(query: string) {
   return useQuery({
     queryKey: ['tags', query],
     queryFn: () => api<Tag[] | null>(`/tags?q=${encodeURIComponent(query)}`),
+    enabled: query.length > 0,
+    staleTime: 30_000,
+  })
+}
+
+export function useSearchUsers(query: string) {
+  return useQuery({
+    queryKey: ['users', 'search', query],
+    queryFn: () => api<UserSummary[] | null>(`/users/search?q=${encodeURIComponent(query)}`),
     enabled: query.length > 0,
     staleTime: 30_000,
   })
