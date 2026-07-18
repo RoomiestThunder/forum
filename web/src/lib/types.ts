@@ -22,6 +22,7 @@ export interface Post {
   comment_count: number
   image_url?: string
   pinned: boolean
+  draft: boolean
 }
 
 export interface Comment {

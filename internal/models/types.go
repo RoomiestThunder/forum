@@ -50,6 +50,7 @@ type Post struct {
 	CommentCount int        `json:"comment_count"`
 	ImageURL     string     `json:"image_url,omitempty"`
 	Pinned       bool       `json:"pinned"`
+	Draft        bool       `json:"draft"`
 }
 
 type Comment struct {

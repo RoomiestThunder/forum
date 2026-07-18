@@ -74,6 +74,7 @@ func sqliteSchema(db *sql.DB) error {
 		content TEXT,
 		image_url TEXT NOT NULL DEFAULT '',
 		pinned BOOLEAN NOT NULL DEFAULT 0,
+		draft BOOLEAN NOT NULL DEFAULT 0,
 		created_at DATETIME,
 		FOREIGN KEY(user_id) REFERENCES users(id)
 	);
@@ -489,8 +490,8 @@ func (s *SQLiteStore) ResolveReport(id int) error {
 
 // ---- Post operations ----
 
-func (s *SQLiteStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error) {
-	res, err := s.db.Exec("INSERT INTO posts (user_id, title, content, image_url, created_at) VALUES (?, ?, ?, ?, ?)", userID, title, content, imageURL, time.Now())
+func (s *SQLiteStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string, draft bool) (int, error) {
+	res, err := s.db.Exec("INSERT INTO posts (user_id, title, content, image_url, draft, created_at) VALUES (?, ?, ?, ?, ?, ?)", userID, title, content, imageURL, draft, time.Now())
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)
 	}
@@ -503,11 +504,25 @@ func (s *SQLiteStore) CreatePost(userID int, title, content string, categoryIDs 
 	return int(postID), nil
 }
 
+// SetPostDraft flips a post's draft flag - used to publish a draft (draft
+// -> false). Only the owner may do this.
+func (s *SQLiteStore) SetPostDraft(id, userID int, draft bool) error {
+	res, err := s.db.Exec("UPDATE posts SET draft = ? WHERE id = ? AND user_id = ?", draft, id, userID)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apperrors.PermissionError("update post")
+	}
+	return nil
+}
+
 // postBaseQuery is the common SELECT for posts with inline aggregated counts.
 // This eliminates the N+1 fillPostMeta pattern.
 const postBaseQuery = `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 1 THEN pl.id END), 0) AS likes,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 0 THEN pl.id END), 0) AS dislikes,
        COUNT(DISTINCT c.id) AS comment_count
@@ -516,6 +531,9 @@ JOIN users u ON p.user_id = u.id
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id`
 
+// GetPost fetches a post by id regardless of draft status - callers are
+// responsible for checking Draft/UserID before showing it to anyone but the
+// owner (see getPost in the API layer).
 func (s *SQLiteStore) GetPost(id int) (*models.Post, error) {
 	query := postBaseQuery + " WHERE p.id = ? GROUP BY p.id, u.username"
 	p, err := s.scanPost(s.db.QueryRow(query, id))
@@ -532,18 +550,24 @@ func (s *SQLiteStore) GetPost(id int) (*models.Post, error) {
 
 func (s *SQLiteStore) GetPosts(limit, offset int) ([]*models.Post, error) {
 	return s.queryPosts(postBaseQuery+`
+		WHERE p.draft = 0
 		GROUP BY p.id, u.username ORDER BY p.pinned DESC, p.created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 }
 
 func (s *SQLiteStore) GetPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	return s.queryPosts(postBaseQuery+`
-		WHERE p.user_id = ? GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, userID, limit, offset)
+		WHERE p.user_id = ? AND p.draft = 0 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, userID, limit, offset)
+}
+
+func (s *SQLiteStore) GetDraftPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
+	return s.queryPosts(postBaseQuery+`
+		WHERE p.user_id = ? AND p.draft = 1 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, userID, limit, offset)
 }
 
 func (s *SQLiteStore) GetPostsByCategory(categoryID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 1 THEN pl.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 0 THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
@@ -552,7 +576,7 @@ JOIN users u ON p.user_id = u.id
 JOIN post_categories pc ON p.id = pc.post_id
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id
-WHERE pc.category_id = ?
+WHERE pc.category_id = ? AND p.draft = 0
 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 	return s.queryPosts(q, categoryID, limit, offset)
 }
@@ -560,7 +584,7 @@ GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 func (s *SQLiteStore) GetLikedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl2.is_like = 1 THEN pl2.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl2.is_like = 0 THEN pl2.id END), 0),
        COUNT(DISTINCT c.id)
@@ -569,6 +593,7 @@ JOIN users u ON p.user_id = u.id
 JOIN post_likes liked ON p.id = liked.post_id AND liked.user_id = ? AND liked.is_like = 1
 LEFT JOIN post_likes pl2 ON p.id = pl2.post_id
 LEFT JOIN comments c ON p.id = c.post_id
+WHERE p.draft = 0
 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 	return s.queryPosts(q, userID, limit, offset)
 }
@@ -576,7 +601,7 @@ GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 func (s *SQLiteStore) scanPost(row *sql.Row) (*models.Post, error) {
 	var p models.Post
 	err := row.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-		&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount)
+		&p.ImageURL, &p.Pinned, &p.Draft, &p.Likes, &p.Dislikes, &p.CommentCount)
 	return &p, err
 }
 
@@ -590,7 +615,7 @@ func (s *SQLiteStore) queryPosts(query string, args ...interface{}) ([]*models.P
 	for rows.Next() {
 		var p models.Post
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-			&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
+			&p.ImageURL, &p.Pinned, &p.Draft, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
 			rows.Close()
 			return nil, apperrors.DatabaseError(err)
 		}
@@ -707,7 +732,7 @@ func (s *SQLiteStore) CountPosts() (int, error) {
 
 func (s *SQLiteStore) CountPostsByUser(userID int) (int, error) {
 	var n int
-	return n, s.db.QueryRow("SELECT COUNT(*) FROM posts WHERE user_id = ?", userID).Scan(&n)
+	return n, s.db.QueryRow("SELECT COUNT(*) FROM posts WHERE user_id = ? AND draft = 0", userID).Scan(&n)
 }
 
 func (s *SQLiteStore) CountPostsByCategory(categoryID int) (int, error) {
@@ -724,11 +749,11 @@ func (s *SQLiteStore) CountLikedPostsByUser(userID int) (int, error) {
 func (s *SQLiteStore) SearchPosts(query string, limit, offset int) ([]*models.Post, int, error) {
 	like := "%" + query + "%"
 	var total int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM posts WHERE title LIKE ? OR content LIKE ?", like, like).Scan(&total); err != nil {
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM posts WHERE (title LIKE ? OR content LIKE ?) AND draft = 0", like, like).Scan(&total); err != nil {
 		return nil, 0, apperrors.DatabaseError(err)
 	}
 	posts, err := s.queryPosts(postBaseQuery+`
-		WHERE p.title LIKE ? OR p.content LIKE ?
+		WHERE (p.title LIKE ? OR p.content LIKE ?) AND p.draft = 0
 		GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, like, like, limit, offset)
 	return posts, total, err
 }
@@ -787,7 +812,7 @@ func (s *SQLiteStore) SetPostTags(postID int, tagNames []string) error {
 func (s *SQLiteStore) GetPostsByTag(tagName string, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 1 THEN pl.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 0 THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
@@ -797,7 +822,7 @@ JOIN post_tags pt ON p.id = pt.post_id
 JOIN tags t ON pt.tag_id = t.id
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id
-WHERE LOWER(t.name) = LOWER(?)
+WHERE LOWER(t.name) = LOWER(?) AND p.draft = 0
 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
 	return s.queryPosts(q, tagName, limit, offset)
 }
@@ -852,7 +877,7 @@ func (s *SQLiteStore) IsBookmarked(postID, userID int) (bool, error) {
 func (s *SQLiteStore) GetBookmarkedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 1 THEN pl.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = 0 THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
@@ -861,6 +886,7 @@ JOIN users u ON p.user_id = u.id
 JOIN bookmarks b ON p.id = b.post_id AND b.user_id = ?
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id
+WHERE p.draft = 0
 GROUP BY p.id, u.username ORDER BY b.created_at DESC LIMIT ? OFFSET ?`
 	return s.queryPosts(q, userID, limit, offset)
 }

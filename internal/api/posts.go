@@ -47,6 +47,8 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case filter == "myposts" && userID != 0:
 		posts, err = s.store.GetPostsByUser(userID, pageSize, offset)
+	case filter == "drafts" && userID != 0:
+		posts, err = s.store.GetDraftPostsByUser(userID, pageSize, offset)
 	case filter == "liked" && userID != 0:
 		posts, err = s.store.GetLikedPostsByUser(userID, pageSize, offset)
 	case filter == "saved" && userID != 0:
@@ -91,6 +93,10 @@ func (s *Server) getPost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "post not found", http.StatusNotFound)
 		return
 	}
+	if post.Draft && post.UserID != userIDFromCtx(r) {
+		jsonError(w, "post not found", http.StatusNotFound)
+		return
+	}
 	comments, _ := s.store.GetCommentsByPostID(id)
 
 	resp := map[string]interface{}{"post": post, "comments": comments}
@@ -108,6 +114,7 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 		CategoryIDs []int    `json:"category_ids"`
 		ImageURL    string   `json:"image_url"`
 		Tags        []string `json:"tags"`
+		Draft       bool     `json:"draft"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
@@ -129,7 +136,7 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := userIDFromCtx(r)
-	postID, err := s.store.CreatePost(userID, body.Title, body.Content, body.CategoryIDs, body.ImageURL)
+	postID, err := s.store.CreatePost(userID, body.Title, body.Content, body.CategoryIDs, body.ImageURL, body.Draft)
 	if err != nil {
 		jsonError(w, "failed to create post", http.StatusInternalServerError)
 		return
@@ -144,6 +151,28 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]int{"id": postID}, http.StatusCreated)
+}
+
+// publishPost flips a draft to published. Owner-only.
+func (s *Server) publishPost(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		jsonError(w, "invalid post id", http.StatusBadRequest)
+		return
+	}
+	userID := userIDFromCtx(r)
+	if err := s.store.SetPostDraft(id, userID, false); err != nil {
+		status := http.StatusInternalServerError
+		if isPermissionErr(err) {
+			status = http.StatusForbidden
+		}
+		jsonError(w, err.Error(), status)
+		return
+	}
+	if s.cache != nil {
+		_ = s.cache.InvalidatePosts(r.Context())
+	}
+	jsonResponse(w, map[string]string{"status": "published"}, http.StatusOK)
 }
 
 func (s *Server) updatePost(w http.ResponseWriter, r *http.Request) {

@@ -23,7 +23,7 @@ import { useAuth } from '../stores/auth'
 export const PAGE_SIZE = 10
 
 export interface FeedParams {
-  filter?: 'myposts' | 'liked' | 'saved'
+  filter?: 'myposts' | 'liked' | 'saved' | 'drafts'
   category?: number
   author?: string
   tag?: string
@@ -104,8 +104,17 @@ export function useCreatePost() {
       category_ids: number[]
       image_url?: string
       tags?: string[]
+      draft?: boolean
     }) => api<{ id: number }>('/posts', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => invalidate(),
+  })
+}
+
+export function usePublishPost() {
+  const invalidate = useInvalidatePosts()
+  return useMutation({
+    mutationFn: (postId: number) => api(`/posts/${postId}/publish`, { method: 'POST' }),
+    onSuccess: (_data, postId) => invalidate(postId),
   })
 }
 

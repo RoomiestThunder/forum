@@ -300,11 +300,11 @@ func (s *PostgresStore) ResolveReport(id int) error {
 
 // ---- Post operations ----
 
-func (s *PostgresStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error) {
+func (s *PostgresStore) CreatePost(userID int, title, content string, categoryIDs []int, imageURL string, draft bool) (int, error) {
 	var postID int
 	err := s.db.QueryRow(
-		"INSERT INTO posts (user_id, title, content, image_url, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-		userID, title, content, imageURL, time.Now(),
+		"INSERT INTO posts (user_id, title, content, image_url, draft, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+		userID, title, content, imageURL, draft, time.Now(),
 	).Scan(&postID)
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)
@@ -317,9 +317,23 @@ func (s *PostgresStore) CreatePost(userID int, title, content string, categoryID
 	return postID, nil
 }
 
+// SetPostDraft flips a post's draft flag - used to publish a draft (draft
+// -> false). Only the owner may do this.
+func (s *PostgresStore) SetPostDraft(id, userID int, draft bool) error {
+	res, err := s.db.Exec("UPDATE posts SET draft = $1 WHERE id = $2 AND user_id = $3", draft, id, userID)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apperrors.PermissionError("update post")
+	}
+	return nil
+}
+
 const pgPostBase = `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0) AS likes,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0) AS dislikes,
        COUNT(DISTINCT c.id) AS comment_count
@@ -328,12 +342,15 @@ JOIN users u ON p.user_id = u.id
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id`
 
+// GetPost fetches a post by id regardless of draft status - callers are
+// responsible for checking Draft/UserID before showing it to anyone but the
+// owner (see getPost in the API layer).
 func (s *PostgresStore) GetPost(id int) (*models.Post, error) {
 	query := pgPostBase + " WHERE p.id = $1 GROUP BY p.id, u.username"
 	var p models.Post
 	err := s.db.QueryRow(query, id).
 		Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-			&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount)
+			&p.ImageURL, &p.Pinned, &p.Draft, &p.Likes, &p.Dislikes, &p.CommentCount)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("Post")
 	}
@@ -347,19 +364,26 @@ func (s *PostgresStore) GetPost(id int) (*models.Post, error) {
 
 func (s *PostgresStore) GetPosts(limit, offset int) ([]*models.Post, error) {
 	return s.queryPosts(pgPostBase+`
+		WHERE p.draft = FALSE
 		GROUP BY p.id, u.username ORDER BY p.pinned DESC, p.created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 }
 
 func (s *PostgresStore) GetPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	return s.queryPosts(pgPostBase+`
-		WHERE p.user_id = $1 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`,
+		WHERE p.user_id = $1 AND p.draft = FALSE GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`,
+		userID, limit, offset)
+}
+
+func (s *PostgresStore) GetDraftPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
+	return s.queryPosts(pgPostBase+`
+		WHERE p.user_id = $1 AND p.draft = TRUE GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`,
 		userID, limit, offset)
 }
 
 func (s *PostgresStore) GetPostsByCategory(categoryID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
@@ -368,7 +392,7 @@ JOIN users u ON p.user_id = u.id
 JOIN post_categories pc ON p.id = pc.post_id
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id
-WHERE pc.category_id = $1
+WHERE pc.category_id = $1 AND p.draft = FALSE
 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`
 	return s.queryPosts(q, categoryID, limit, offset)
 }
@@ -376,7 +400,7 @@ GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`
 func (s *PostgresStore) GetLikedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl2.is_like = TRUE  THEN pl2.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl2.is_like = FALSE THEN pl2.id END), 0),
        COUNT(DISTINCT c.id)
@@ -385,6 +409,7 @@ JOIN users u ON p.user_id = u.id
 JOIN post_likes liked ON p.id = liked.post_id AND liked.user_id = $1 AND liked.is_like = TRUE
 LEFT JOIN post_likes pl2 ON p.id = pl2.post_id
 LEFT JOIN comments c ON p.id = c.post_id
+WHERE p.draft = FALSE
 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`
 	return s.queryPosts(q, userID, limit, offset)
 }
@@ -393,12 +418,12 @@ GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`
 func (s *PostgresStore) SearchPosts(query string, limit, offset int) ([]*models.Post, int, error) {
 	var total int
 	if err := s.db.QueryRow(
-		"SELECT COUNT(*) FROM posts WHERE search_vector @@ plainto_tsquery('english', $1)", query,
+		"SELECT COUNT(*) FROM posts WHERE search_vector @@ plainto_tsquery('english', $1) AND draft = FALSE", query,
 	).Scan(&total); err != nil {
 		return nil, 0, apperrors.DatabaseError(err)
 	}
 	q := pgPostBase + `
-		WHERE p.search_vector @@ plainto_tsquery('english', $1)
+		WHERE p.search_vector @@ plainto_tsquery('english', $1) AND p.draft = FALSE
 		GROUP BY p.id, u.username
 		ORDER BY ts_rank(p.search_vector, plainto_tsquery('english', $1)) DESC
 		LIMIT $2 OFFSET $3`
@@ -416,7 +441,7 @@ func (s *PostgresStore) queryPosts(query string, args ...interface{}) ([]*models
 	for rows.Next() {
 		var p models.Post
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Content, &p.CreatedAt, &p.Author,
-			&p.ImageURL, &p.Pinned, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
+			&p.ImageURL, &p.Pinned, &p.Draft, &p.Likes, &p.Dislikes, &p.CommentCount); err != nil {
 			rows.Close()
 			return nil, apperrors.DatabaseError(err)
 		}
@@ -528,7 +553,7 @@ func (s *PostgresStore) CountPosts() (int, error) {
 
 func (s *PostgresStore) CountPostsByUser(userID int) (int, error) {
 	var n int
-	return n, s.db.QueryRow("SELECT COUNT(*) FROM posts WHERE user_id = $1", userID).Scan(&n)
+	return n, s.db.QueryRow("SELECT COUNT(*) FROM posts WHERE user_id = $1 AND draft = FALSE", userID).Scan(&n)
 }
 
 func (s *PostgresStore) CountPostsByCategory(categoryID int) (int, error) {
@@ -594,7 +619,7 @@ func (s *PostgresStore) SetPostTags(postID int, tagNames []string) error {
 func (s *PostgresStore) GetPostsByTag(tagName string, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
@@ -604,7 +629,7 @@ JOIN post_tags pt ON p.id = pt.post_id
 JOIN tags t ON pt.tag_id = t.id
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id
-WHERE LOWER(t.name) = LOWER($1)
+WHERE LOWER(t.name) = LOWER($1) AND p.draft = FALSE
 GROUP BY p.id, u.username ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`
 	return s.queryPosts(q, tagName, limit, offset)
 }
@@ -659,7 +684,7 @@ func (s *PostgresStore) IsBookmarked(postID, userID int) (bool, error) {
 func (s *PostgresStore) GetBookmarkedPostsByUser(userID, limit, offset int) ([]*models.Post, error) {
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
-       COALESCE(p.image_url,''), p.pinned,
+       COALESCE(p.image_url,''), p.pinned, p.draft,
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0),
        COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
@@ -668,6 +693,7 @@ JOIN users u ON p.user_id = u.id
 JOIN bookmarks b ON p.id = b.post_id AND b.user_id = $1
 LEFT JOIN post_likes pl ON p.id = pl.post_id
 LEFT JOIN comments c ON p.id = c.post_id
+WHERE p.draft = FALSE
 GROUP BY p.id, u.username, b.created_at ORDER BY b.created_at DESC LIMIT $2 OFFSET $3`
 	return s.queryPosts(q, userID, limit, offset)
 }

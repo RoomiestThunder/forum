@@ -9,6 +9,7 @@ const FILTERS = [
   { key: 'myposts', label: 'My posts' },
   { key: 'liked', label: 'Liked' },
   { key: 'saved', label: 'Saved' },
+  { key: 'drafts', label: 'Drafts' },
 ] as const
 
 export default function Feed() {
@@ -20,7 +21,7 @@ export default function Feed() {
   const tagParam = searchParams.get('tag')
 
   const params: FeedParams = {}
-  if (filterParam === 'myposts' || filterParam === 'liked' || filterParam === 'saved') {
+  if (filterParam === 'myposts' || filterParam === 'liked' || filterParam === 'saved' || filterParam === 'drafts') {
     params.filter = filterParam
   }
   if (categoryParam) params.category = Number(categoryParam)

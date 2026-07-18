@@ -39,13 +39,15 @@ type Store interface {
 	ResolveReport(id int) error
 
 	// Post operations
-	CreatePost(userID int, title, content string, categoryIDs []int, imageURL string) (int, error)
+	CreatePost(userID int, title, content string, categoryIDs []int, imageURL string, draft bool) (int, error)
 	GetPost(id int) (*models.Post, error)
 	GetPosts(limit, offset int) ([]*models.Post, error)
 	GetPostsByUser(userID, limit, offset int) ([]*models.Post, error)
+	GetDraftPostsByUser(userID, limit, offset int) ([]*models.Post, error)
 	GetPostsByCategory(categoryID, limit, offset int) ([]*models.Post, error)
 	GetLikedPostsByUser(userID, limit, offset int) ([]*models.Post, error)
 	UpdatePost(id, userID int, title, content string) error
+	SetPostDraft(id, userID int, draft bool) error
 	DeletePost(id, userID int) error
 	CountPosts() (int, error)
 	CountPostsByUser(userID int) (int, error)

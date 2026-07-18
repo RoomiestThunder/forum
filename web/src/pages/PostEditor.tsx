@@ -6,6 +6,7 @@ import {
   useCategories,
   useCreatePost,
   usePost,
+  usePublishPost,
   useUpdatePost,
   useUploadPostImage,
 } from '../lib/queries'
@@ -28,7 +29,9 @@ export default function PostEditor() {
   const existing = usePost(postId ?? 0)
   const create = useCreatePost()
   const update = useUpdatePost(postId ?? 0)
+  const publish = usePublishPost()
   const uploadImage = useUploadPostImage()
+  const isDraft = isEdit ? (existing.data?.post.draft ?? false) : true
 
   // Prefill the form when editing.
   useEffect(() => {
@@ -55,7 +58,7 @@ export default function PostEditor() {
 
   const mutation = isEdit ? update : create
 
-  const submit = () => {
+  const submit = (asDraft: boolean) => {
     const trimmedTitle = title.trim()
     const trimmedContent = content.trim()
     if (!trimmedTitle || !trimmedContent) {
@@ -71,7 +74,15 @@ export default function PostEditor() {
     if (isEdit) {
       update.mutate(
         { title: trimmedTitle, content: trimmedContent },
-        { onSuccess: () => navigate(`/post/${postId}`) },
+        {
+          onSuccess: () => {
+            if (isDraft && !asDraft) {
+              publish.mutate(postId!, { onSuccess: () => navigate(`/post/${postId}`) })
+            } else {
+              navigate(`/post/${postId}`)
+            }
+          },
+        },
       )
     } else {
       create.mutate(
@@ -81,13 +92,17 @@ export default function PostEditor() {
           category_ids: selectedCategories,
           image_url: imageUrl ?? undefined,
           tags: tags.length > 0 ? tags : undefined,
+          draft: asDraft,
         },
-        { onSuccess: ({ id: newId }) => navigate(`/post/${newId}`) },
+        {
+          onSuccess: ({ id: newId }) =>
+            navigate(asDraft ? `/post/${newId}/edit` : `/post/${newId}`),
+        },
       )
     }
   }
 
-  const error = validationError ?? (mutation.isError ? mutation.error.message : null)
+  const error = validationError ?? (mutation.isError ? mutation.error.message : publish.isError ? publish.error.message : null)
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -96,7 +111,7 @@ export default function PostEditor() {
         className="mt-6 space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
-          submit()
+          submit(false)
         }}
       >
         {error && (
@@ -207,12 +222,28 @@ export default function PostEditor() {
           </>
         )}
         <div className="flex gap-2">
+          {(!isEdit || isDraft) && (
+            <button
+              type="button"
+              onClick={() => submit(true)}
+              disabled={mutation.isPending || publish.isPending}
+              className="rounded-lg border border-zinc-300 px-4 py-2 font-medium text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              {isEdit ? 'Save draft' : 'Save as draft'}
+            </button>
+          )}
           <button
             type="submit"
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || publish.isPending}
             className="rounded-lg bg-indigo-600 px-4 py-2 font-medium text-white transition hover:bg-indigo-500 disabled:opacity-50"
           >
-            {mutation.isPending ? 'Saving…' : isEdit ? 'Save changes' : 'Publish'}
+            {mutation.isPending || publish.isPending
+              ? 'Saving…'
+              : isEdit
+                ? isDraft
+                  ? 'Publish'
+                  : 'Save changes'
+                : 'Publish'}
           </button>
           <button
             type="button"

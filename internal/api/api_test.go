@@ -1088,3 +1088,91 @@ func TestDirectMessages(t *testing.T) {
 		t.Fatalf("alice's conversations after reply: want 1 with bob, got %+v", convos)
 	}
 }
+
+func TestPostDrafts(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	bob := registerUser(t, srv.URL, "bob")
+
+	resp := postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
+		"title": "Unfinished thoughts", "content": "still drafting this",
+		"category_ids": []int{1}, "draft": true,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create draft: want 201, got %d", resp.StatusCode)
+	}
+	draftID := decode[map[string]int](t, resp)["id"]
+
+	// A draft never shows up in the public feed.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts", "", nil)
+	posts := decode[[]map[string]any](t, resp)
+	for _, p := range posts {
+		if p["id"] == float64(draftID) {
+			t.Fatalf("draft post leaked into public feed: %+v", posts)
+		}
+	}
+
+	// Nor does it show up on the author's public profile.
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts?author=alice", srv.URL), "", nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 0 {
+		t.Fatalf("draft leaked into author filter: %+v", posts)
+	}
+
+	// Another user gets 404 fetching it directly, not the content.
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, draftID), bob, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("bob fetching alice's draft: want 404, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// An anonymous visitor also can't see it.
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, draftID), "", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("anonymous fetching draft: want 404, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// The owner can still fetch and edit it.
+	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, draftID), alice, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("alice fetching own draft: want 200, got %d", resp.StatusCode)
+	}
+	page := decode[map[string]any](t, resp)
+	if page["post"].(map[string]any)["draft"] != true {
+		t.Fatalf("expected draft:true, got %+v", page["post"])
+	}
+
+	// It shows up under the dedicated drafts filter, only for the owner.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=drafts", alice, nil)
+	posts = decode[[]map[string]any](t, resp)
+	if len(posts) != 1 || posts[0]["id"] != float64(draftID) {
+		t.Fatalf("alice's drafts filter: want 1 draft, got %+v", posts)
+	}
+
+	// Bob can't publish alice's draft.
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/posts/%d/publish", srv.URL, draftID), bob, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("bob publishing alice's draft: want 403, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// Alice publishes it; it's now public.
+	resp = postJSON(t, fmt.Sprintf("%s/api/v1/posts/%d/publish", srv.URL, draftID), alice, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("publish: want 200, got %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts", "", nil)
+	posts = decode[[]map[string]any](t, resp)
+	found := false
+	for _, p := range posts {
+		if p["id"] == float64(draftID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("published post missing from public feed: %+v", posts)
+	}
+}

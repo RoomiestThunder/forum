@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS posts (
     content      TEXT,
     image_url    TEXT NOT NULL DEFAULT '',
     pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+    draft        BOOLEAN NOT NULL DEFAULT FALSE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     search_vector tsvector GENERATED ALWAYS AS (
         setweight(to_tsvector('english', coalesce(title, '')), 'A') ||

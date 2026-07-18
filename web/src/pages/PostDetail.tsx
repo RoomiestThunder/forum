@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bookmark, Loader2, Pencil, Pin, Trash2 } from 'lucide-react'
+import { Bookmark, Loader2, Pencil, Pin, Send, Trash2 } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link, useNavigate, useParams } from 'react-router'
@@ -12,6 +12,7 @@ import {
   useDeletePost,
   useMe,
   usePost,
+  usePublishPost,
   useSetPostPinned,
   useToggleBookmark,
   useVotePost,
@@ -36,6 +37,7 @@ export default function PostDetail() {
   const setPinned = useSetPostPinned()
   const createComment = useCreateComment(postId)
   const toggleBookmark = useToggleBookmark(postId)
+  const publishPost = usePublishPost()
 
   const [commentDraft, setCommentDraft] = useState('')
 
@@ -85,8 +87,24 @@ export default function PostDetail() {
               {c.name}
             </Link>
           ))}
+          {post.draft && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
+              Draft
+            </span>
+          )}
           {(isOwn || isStaff) && (
             <span className="ml-auto flex items-center gap-1">
+              {isOwn && post.draft && (
+                <button
+                  type="button"
+                  onClick={() => publishPost.mutate(post.id)}
+                  disabled={publishPost.isPending}
+                  className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  <Send size={13} />
+                  {publishPost.isPending ? 'Publishing…' : 'Publish'}
+                </button>
+              )}
               {isStaff && (
                 <button
                   type="button"

@@ -17,6 +17,11 @@ export default function PostCard({ post }: { post: Post }) {
         </Link>
         <span aria-hidden>·</span>
         <time dateTime={post.created_at}>{timeAgo(post.created_at)}</time>
+        {post.draft && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
+            Draft
+          </span>
+        )}
         {post.categories?.map((c) => (
           <Link
             key={c.id}

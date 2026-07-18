@@ -121,6 +121,7 @@ func (s *Server) Mount(root chi.Router) {
 			r.With(s.optionalAuth).Get("/{id}", s.getPost)
 			r.With(s.requireAuth).Put("/{id}", s.updatePost)
 			r.With(s.requireAuth).Delete("/{id}", s.deletePost)
+			r.With(s.requireAuth).Post("/{id}/publish", s.publishPost)
 			r.With(s.requireAuth).Post("/{id}", s.createComment)
 		})
 
