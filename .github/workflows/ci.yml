@@ -8,7 +8,7 @@ on:
 
 jobs:
   frontend:
-    name: web: lint → typecheck → build
+    name: "web: lint, typecheck, build"
     runs-on: ubuntu-latest
 
     steps:
