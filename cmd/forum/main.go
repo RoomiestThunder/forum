@@ -105,7 +105,10 @@ func main() {
 
 	// ---- HTTP router ----
 	root := chi.NewRouter()
-	root.Use(chimw.RealIP)
+	// chimw.RealIP is deliberately not used: it trusts X-Forwarded-For /
+	// X-Real-IP unconditionally, which is spoofable without a trusted
+	// reverse proxy in front stripping/setting those headers, and the rate
+	// limiter keys directly off the request IP.
 	root.Use(chimw.Recoverer)
 	root.Use(appmw.SecurityHeaders)
 

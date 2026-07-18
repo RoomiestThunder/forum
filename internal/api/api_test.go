@@ -78,7 +78,7 @@ func doJSON(t *testing.T, method, url, token string, payload any) *http.Response
 
 func decode[T any](t *testing.T, resp *http.Response) T {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var v T
 	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestMe(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("me without token: want 401, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestCommentLifecycle(t *testing.T) {
@@ -162,7 +162,7 @@ func TestCommentLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("update comment: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Alice must not be able to edit Bob's comment.
 	resp = doJSON(t, http.MethodPut, fmt.Sprintf("%s/api/v1/comments/%d", srv.URL, commentID), alice, map[string]string{
@@ -171,7 +171,7 @@ func TestCommentLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("update foreign comment: want 403, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// The edit is visible on the post.
 	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), "", nil)
@@ -189,14 +189,14 @@ func TestCommentLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("delete foreign comment: want 403, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Bob deletes his own comment.
 	resp = doJSON(t, http.MethodDelete, fmt.Sprintf("%s/api/v1/comments/%d", srv.URL, commentID), bob, nil)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete comment: want 204, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestCommentValidation(t *testing.T) {
@@ -215,7 +215,7 @@ func TestCommentValidation(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("empty comment: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodPut, fmt.Sprintf("%s/api/v1/comments/%d", srv.URL, commentID), alice, map[string]string{
 		"content": strings.Repeat("x", 501),
@@ -223,7 +223,7 @@ func TestCommentValidation(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("oversized comment: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestPostTitleValidation(t *testing.T) {
@@ -237,7 +237,7 @@ func TestPostTitleValidation(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("101-char title: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	okTitle := strings.Repeat("a", 100)
 	resp = postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
@@ -246,7 +246,7 @@ func TestPostTitleValidation(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("100-char title: want 201, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Update path enforces the same rule.
 	postID := createPost(t, srv.URL, alice, "Original")
@@ -256,7 +256,7 @@ func TestPostTitleValidation(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("update with 101-char title: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestProfile(t *testing.T) {
@@ -284,7 +284,7 @@ func TestProfile(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown profile: want 404, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Update bio.
 	resp = doJSON(t, http.MethodPut, srv.URL+"/api/v1/me/bio", alice, map[string]string{
@@ -293,7 +293,7 @@ func TestProfile(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("update bio: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/users/alice", "", nil)
 	profile = decode[map[string]any](t, resp)
@@ -307,7 +307,7 @@ func TestProfile(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("oversized bio: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestListPostsFilters(t *testing.T) {
@@ -337,7 +337,7 @@ func TestListPostsFilters(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("like: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=liked", bob, nil)
 	posts = decode[[]map[string]any](t, resp)
@@ -416,7 +416,7 @@ func TestTags(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("6 tags: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestBookmarks(t *testing.T) {
@@ -430,13 +430,13 @@ func TestBookmarks(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous bookmark: want 401, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = postJSON(t, srv.URL+"/api/v1/bookmarks", bob, map[string]any{"post_id": postID, "bookmarked": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("bookmark: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// is_bookmarked reflects the caller, not the post author.
 	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), bob, nil)
@@ -469,7 +469,7 @@ func TestBookmarks(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unbookmark: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts?filter=saved", bob, nil)
 	posts = decode[[]map[string]any](t, resp)
@@ -496,18 +496,18 @@ func TestNotifications(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create comment: want 201, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Bob likes Alice's post -> Alice gets notified again.
 	resp = postJSON(t, srv.URL+"/api/v1/like/post", bob, map[string]any{"post_id": postID, "is_like": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("like post: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Alice liking her own post must not notify herself.
 	resp = postJSON(t, srv.URL+"/api/v1/like/post", alice, map[string]any{"post_id": postID, "is_like": true})
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", alice, nil)
 	count = decode[map[string]int](t, resp)
@@ -548,7 +548,7 @@ func TestNotifications(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("mark read: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", alice, nil)
 	count = decode[map[string]int](t, resp)
@@ -561,7 +561,7 @@ func TestNotifications(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("mark all read: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/notifications/unread-count", alice, nil)
 	count = decode[map[string]int](t, resp)
@@ -574,17 +574,17 @@ func TestNotifications(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous notifications: want 401, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestSearch(t *testing.T) {
 	srv := newTestServer(t)
 	alice := registerUser(t, srv.URL, "alice")
-	postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
+	_ = postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
 		"title": "Understanding Go channels", "content": "Channels are a core concurrency primitive.",
 		"category_ids": []int{1},
 	}).Body.Close()
-	postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
+	_ = postJSON(t, srv.URL+"/api/v1/posts", alice, map[string]any{
 		"title": "React hooks", "content": "useEffect and useState.", "category_ids": []int{1},
 	}).Body.Close()
 
@@ -619,7 +619,7 @@ func TestSearch(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("search without q: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestFirstUserIsAdmin(t *testing.T) {
@@ -651,12 +651,12 @@ func TestAdminAccessControl(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("plain user /admin/users: want 403, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", plain, nil)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("plain user /admin/reports: want 403, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Admin promotes "mod" to moderator.
 	var modUserID int
@@ -681,19 +681,19 @@ func TestAdminAccessControl(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("promote to moderator: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Moderator can reach staff routes (reports) but not admin-only ones (users).
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", mod, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("moderator /admin/reports: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/users", mod, nil)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("moderator /admin/users: want 403, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Admin can't strip their own admin flag.
 	var adminUserID int
@@ -707,14 +707,14 @@ func TestAdminAccessControl(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("self-demote: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Admin can't ban themselves.
 	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/users/%d/ban", srv.URL, adminUserID), admin, map[string]any{"banned": true})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("self-ban: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestBanTakesEffectImmediately(t *testing.T) {
@@ -731,13 +731,13 @@ func TestBanTakesEffectImmediately(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pre-ban /me: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/users/%d/ban", srv.URL, targetID), admin, map[string]any{"banned": true})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("ban: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Same still-unexpired access token must now be rejected - requireAuth
 	// re-checks the ban flag on every request rather than trusting the JWT.
@@ -745,14 +745,14 @@ func TestBanTakesEffectImmediately(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("post-ban /me with old token: want 403, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Login is also blocked from here on.
 	resp = postJSON(t, srv.URL+"/api/v1/auth/login", "", map[string]string{"login": "troll", "password": "password123"})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("login while banned: want 403, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestReportsAndModeration(t *testing.T) {
@@ -768,7 +768,7 @@ func TestReportsAndModeration(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create report: want 201, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", admin, nil)
 	reports := decode[[]map[string]any](t, resp)
@@ -782,7 +782,7 @@ func TestReportsAndModeration(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pin post: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, postID), "", nil)
 	page := decode[map[string]any](t, resp)
@@ -794,13 +794,13 @@ func TestReportsAndModeration(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("admin delete post: want 204, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = postJSON(t, fmt.Sprintf("%s/api/v1/admin/reports/%d/resolve", srv.URL, reportID), admin, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("resolve report: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/reports", admin, nil)
 	reports = decode[[]map[string]any](t, resp)
@@ -821,7 +821,7 @@ func TestPinnedPostsSortFirst(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pin: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/posts", "", nil)
 	posts := decode[[]map[string]any](t, resp)
@@ -845,7 +845,7 @@ func TestGithubLoginUnconfigured(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("github login without config: want 503, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestEmailVerification(t *testing.T) {
@@ -869,13 +869,13 @@ func TestEmailVerification(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("verify with wrong token: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = postJSON(t, srv.URL+"/api/v1/auth/verify-email", "", map[string]string{"token": verifyToken})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("verify: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/me", token, nil)
 	me = decode[map[string]any](t, resp)
@@ -888,7 +888,7 @@ func TestEmailVerification(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("reuse of verify token: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestPasswordReset(t *testing.T) {
@@ -900,12 +900,12 @@ func TestPasswordReset(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("forgot-password known email: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	resp = postJSON(t, srv.URL+"/api/v1/auth/forgot-password", "", map[string]string{"email": "nobody@example.com"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("forgot-password unknown email: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	alice, err := store.GetUserByEmail("alice@example.com")
 	if err != nil {
@@ -923,7 +923,7 @@ func TestPasswordReset(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("reset with short password: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = postJSON(t, srv.URL+"/api/v1/auth/reset-password", "", map[string]string{
 		"token": resetToken, "new_password": "newpassword456",
@@ -931,20 +931,20 @@ func TestPasswordReset(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("reset password: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Old password no longer works, new one does.
 	resp = postJSON(t, srv.URL+"/api/v1/auth/login", "", map[string]string{"login": "alice", "password": "password123"})
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("login with old password: want 401, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = postJSON(t, srv.URL+"/api/v1/auth/login", "", map[string]string{"login": "alice", "password": "newpassword456"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("login with new password: want 200, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// The reset token is single-use.
 	resp = postJSON(t, srv.URL+"/api/v1/auth/reset-password", "", map[string]string{
@@ -953,7 +953,7 @@ func TestPasswordReset(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("reuse of reset token: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestOAuthUserCreationAndLinking(t *testing.T) {
@@ -1011,21 +1011,21 @@ func TestDirectMessages(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("message self: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Messaging a nonexistent user 404s.
 	resp = postJSON(t, srv.URL+"/api/v1/messages/nobody", alice, map[string]any{"content": "hi"})
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("message nonexistent user: want 404, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Empty content is rejected.
 	resp = postJSON(t, srv.URL+"/api/v1/messages/bob", alice, map[string]any{"content": "   "})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("empty message: want 400, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = postJSON(t, srv.URL+"/api/v1/messages/bob", alice, map[string]any{"content": "hey bob"})
 	if resp.StatusCode != http.StatusCreated {
@@ -1080,7 +1080,7 @@ func TestDirectMessages(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("reply: want 201, got %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/messages", alice, nil)
 	convos = decode[[]map[string]any](t, resp)
