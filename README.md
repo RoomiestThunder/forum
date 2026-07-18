@@ -251,15 +251,15 @@ go test -short -race ./...
 # Full integration tests (requires Docker for testcontainers)
 go test ./internal/tests/...
 
-# Frontend lint + typecheck + build
-cd web && npm run lint && npm run build
+# Frontend lint + tests + typecheck + build
+cd web && npm run lint && npm test && npm run build
 ```
 
 ## CI/CD
 
 GitHub Actions pipeline on every push to `main` / `develop`:
 
-1. **frontend** — `oxlint`, `tsc`, `vite build`; the built `web/dist` is passed to the next job as an artifact
+1. **frontend** — `oxlint`, `vitest`, `tsc`, `vite build`; the built `web/dist` is passed to the next job as an artifact
 2. **test** — `golangci-lint`, `go test -race ./...` (with PostgreSQL + Redis service containers), `go build` with the real embedded SPA
 3. **docker** — multi-stage image build + push to GHCR (main branch only)
 

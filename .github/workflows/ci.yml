@@ -8,7 +8,7 @@ on:
 
 jobs:
   frontend:
-    name: "web: lint, typecheck, build"
+    name: "web: lint, test, typecheck, build"
     runs-on: ubuntu-latest
 
     steps:
@@ -28,6 +28,10 @@ jobs:
       - name: Lint
         working-directory: web
         run: npm run lint
+
+      - name: Test
+        working-directory: web
+        run: npm test
 
       - name: Build
         working-directory: web

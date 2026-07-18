@@ -126,7 +126,7 @@ Both `internal/database/schema_postgres.sql` (embedded, used by integration test
 - **`internal/api`** — handler-level tests against an in-memory SQLite store (`:memory:`, `SetMaxOpenConns(1)` so every test connection shares the same database), covering auth, CRUD, filters, moderation, and account-security flows end to end through real HTTP requests.
 - **`internal/config`**, **`internal/errors`**, **`internal/middleware`** — focused unit tests.
 - **`internal/tests`** — integration tests that spin up real PostgreSQL via testcontainers, for the code paths that differ between the SQLite and Postgres store implementations (full-text search, in particular).
-- **web/** — `oxlint` + `tsc -b` catch type and lint errors; no component test suite yet.
+- **web/** — `oxlint` + `tsc -b` catch type and lint errors; Vitest + React Testing Library cover key components (auth forms, post cards, comment mentions/editing), mocking `lib/api` at the function level rather than stubbing `fetch` directly.
 
 Run everything with `go test -short ./...` (SQLite tests only, fast) or add `./internal/tests/...` for the Postgres integration tests (requires Docker).
 
