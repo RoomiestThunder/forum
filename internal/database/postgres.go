@@ -320,8 +320,8 @@ func (s *PostgresStore) CreatePost(userID int, title, content string, categoryID
 const pgPostBase = `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
        COALESCE(p.image_url,''), p.pinned,
-       COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0) AS likes,
-       COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0) AS dislikes,
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0) AS likes,
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0) AS dislikes,
        COUNT(DISTINCT c.id) AS comment_count
 FROM posts p
 JOIN users u ON p.user_id = u.id
@@ -360,8 +360,8 @@ func (s *PostgresStore) GetPostsByCategory(categoryID, limit, offset int) ([]*mo
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
        COALESCE(p.image_url,''), p.pinned,
-       COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
 FROM posts p
 JOIN users u ON p.user_id = u.id
@@ -377,8 +377,8 @@ func (s *PostgresStore) GetLikedPostsByUser(userID, limit, offset int) ([]*model
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
        COALESCE(p.image_url,''), p.pinned,
-       COALESCE(SUM(CASE WHEN pl2.is_like = TRUE  THEN 1 ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN pl2.is_like = FALSE THEN 1 ELSE 0 END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl2.is_like = TRUE  THEN pl2.id END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl2.is_like = FALSE THEN pl2.id END), 0),
        COUNT(DISTINCT c.id)
 FROM posts p
 JOIN users u ON p.user_id = u.id
@@ -595,8 +595,8 @@ func (s *PostgresStore) GetPostsByTag(tagName string, limit, offset int) ([]*mod
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
        COALESCE(p.image_url,''), p.pinned,
-       COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
 FROM posts p
 JOIN users u ON p.user_id = u.id
@@ -660,8 +660,8 @@ func (s *PostgresStore) GetBookmarkedPostsByUser(userID, limit, offset int) ([]*
 	q := `
 SELECT p.id, p.user_id, p.title, p.content, p.created_at, u.username,
        COALESCE(p.image_url,''), p.pinned,
-       COALESCE(SUM(CASE WHEN pl.is_like = TRUE  THEN 1 ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN pl.is_like = FALSE THEN 1 ELSE 0 END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = TRUE  THEN pl.id END), 0),
+       COALESCE(COUNT(DISTINCT CASE WHEN pl.is_like = FALSE THEN pl.id END), 0),
        COUNT(DISTINCT c.id)
 FROM posts p
 JOIN users u ON p.user_id = u.id

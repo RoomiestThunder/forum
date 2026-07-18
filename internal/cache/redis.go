@@ -92,13 +92,18 @@ func (c *Cache) InvalidatePosts(ctx context.Context) error {
 // AllowRequest returns true if the IP is within rate limit, false if exceeded.
 func (c *Cache) AllowRequest(ctx context.Context, ip string) (bool, error) {
 	key := fmt.Sprintf("rate:%s", ip)
-	pipe := c.client.Pipeline()
-	incr := pipe.Incr(ctx, key)
-	pipe.Expire(ctx, key, rateWindow)
-	if _, err := pipe.Exec(ctx); err != nil {
+	count, err := c.client.Incr(ctx, key).Result()
+	if err != nil {
 		return true, nil // fail open
 	}
-	return incr.Val() <= int64(rateLimit), nil
+	// Only arm the expiry on the first request of a window. Re-arming it on
+	// every call would keep pushing the reset out as long as traffic kept
+	// coming in, so a busy IP could stay rate-limited indefinitely instead
+	// of getting a fresh window every minute.
+	if count == 1 {
+		c.client.Expire(ctx, key, rateWindow)
+	}
+	return count <= int64(rateLimit), nil
 }
 
 // ---- WebSocket pub/sub ----
