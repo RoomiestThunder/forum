@@ -106,3 +106,22 @@ export interface Report {
   status: 'open' | 'resolved'
   created_at: string
 }
+
+export interface Conversation {
+  id: number
+  other_username: string
+  other_avatar_url: string
+  last_message: string
+  last_message_at: string
+  unread_count: number
+}
+
+export interface DirectMessage {
+  id: number
+  conversation_id: number
+  sender_id: number
+  sender: string
+  content: string
+  created_at: string
+  read_at?: string
+}

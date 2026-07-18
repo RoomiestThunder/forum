@@ -5,6 +5,8 @@ import Admin from './pages/Admin'
 import Feed from './pages/Feed'
 import ForgotPassword from './pages/ForgotPassword'
 import Login from './pages/Login'
+import MessageThread from './pages/MessageThread'
+import Messages from './pages/Messages'
 import OAuthCallback from './pages/OAuthCallback'
 import PostDetail from './pages/PostDetail'
 import PostEditor from './pages/PostEditor'
@@ -57,6 +59,22 @@ function App() {
         <Route path="oauth/callback" element={<OAuthCallback />} />
         <Route path="u/:username" element={<Profile />} />
         <Route path="search" element={<Search />} />
+        <Route
+          path="messages"
+          element={
+            <RequireAuth>
+              <Messages />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="messages/:username"
+          element={
+            <RequireAuth>
+              <MessageThread />
+            </RequireAuth>
+          }
+        />
         <Route
           path="settings"
           element={

@@ -113,6 +113,27 @@ type Report struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
+// Conversation is a 1:1 direct-message thread, from one participant's
+// point of view - "other" always refers to whoever isn't the caller.
+type Conversation struct {
+	ID             int       `json:"id"`
+	OtherUsername  string    `json:"other_username"`
+	OtherAvatarURL string    `json:"other_avatar_url"`
+	LastMessage    string    `json:"last_message"`
+	LastMessageAt  time.Time `json:"last_message_at"`
+	UnreadCount    int       `json:"unread_count"`
+}
+
+type Message struct {
+	ID             int        `json:"id"`
+	ConversationID int        `json:"conversation_id"`
+	SenderID       int        `json:"sender_id"`
+	Sender         string     `json:"sender"`
+	Content        string     `json:"content"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ReadAt         *time.Time `json:"read_at,omitempty"`
+}
+
 type PaginatedPosts struct {
 	Posts      []*Post `json:"posts"`
 	Page       int     `json:"page"`

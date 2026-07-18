@@ -913,6 +913,134 @@ func (s *PostgresStore) MarkAllNotificationsRead(userID int) error {
 	return err
 }
 
+// ---- Direct message operations ----
+
+// GetOrCreateConversation returns the conversation id between two users,
+// creating it if needed. The pair is stored with the lower user id first so
+// the (user_a_id, user_b_id) unique constraint catches both call orders.
+func (s *PostgresStore) GetOrCreateConversation(userA, userB int) (int, error) {
+	a, b := userA, userB
+	if a > b {
+		a, b = b, a
+	}
+	if _, err := s.db.Exec(
+		"INSERT INTO conversations (user_a_id, user_b_id) VALUES ($1, $2) ON CONFLICT (user_a_id, user_b_id) DO NOTHING",
+		a, b,
+	); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	var id int
+	if err := s.db.QueryRow("SELECT id FROM conversations WHERE user_a_id = $1 AND user_b_id = $2", a, b).Scan(&id); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return id, nil
+}
+
+func (s *PostgresStore) ListConversations(userID int) ([]*models.Conversation, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			c.id,
+			CASE WHEN c.user_a_id = $1 THEN ub.username ELSE ua.username END,
+			CASE WHEN c.user_a_id = $1 THEN ub.avatar_url ELSE ua.avatar_url END,
+			COALESCE((SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1), ''),
+			c.last_message_at,
+			(SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND sender_id != $1 AND read_at IS NULL)
+		FROM conversations c
+		JOIN users ua ON c.user_a_id = ua.id
+		JOIN users ub ON c.user_b_id = ub.id
+		WHERE c.user_a_id = $1 OR c.user_b_id = $1
+		ORDER BY c.last_message_at DESC, c.id DESC`, userID)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var convos []*models.Conversation
+	for rows.Next() {
+		var c models.Conversation
+		if err := rows.Scan(&c.ID, &c.OtherUsername, &c.OtherAvatarURL, &c.LastMessage, &c.LastMessageAt, &c.UnreadCount); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		convos = append(convos, &c)
+	}
+	return convos, rows.Err()
+}
+
+func (s *PostgresStore) GetMessages(conversationID, limit, offset int) ([]*models.Message, error) {
+	rows, err := s.db.Query(`
+		SELECT m.id, m.conversation_id, m.sender_id, u.username, m.content, m.created_at, m.read_at
+		FROM messages m
+		JOIN users u ON m.sender_id = u.id
+		WHERE m.conversation_id = $1
+		ORDER BY m.created_at DESC, m.id DESC
+		LIMIT $2 OFFSET $3`, conversationID, limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var messages []*models.Message
+	for rows.Next() {
+		var m models.Message
+		var readAt sql.NullTime
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Sender, &m.Content, &m.CreatedAt, &readAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		if readAt.Valid {
+			t := readAt.Time
+			m.ReadAt = &t
+		}
+		messages = append(messages, &m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	// Queried newest-first for a stable LIMIT/OFFSET window; reverse for
+	// chronological (oldest-first) rendering.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, nil
+}
+
+func (s *PostgresStore) CreateMessage(conversationID, senderID int, content string) (*models.Message, error) {
+	var id int
+	if err := s.db.QueryRow(
+		"INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3) RETURNING id",
+		conversationID, senderID, content,
+	).Scan(&id); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	if _, err := s.db.Exec("UPDATE conversations SET last_message_at = NOW() WHERE id = $1", conversationID); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	var m models.Message
+	err := s.db.QueryRow(`
+		SELECT m.id, m.conversation_id, m.sender_id, u.username, m.content, m.created_at
+		FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.id = $1`, id).
+		Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Sender, &m.Content, &m.CreatedAt)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return &m, nil
+}
+
+func (s *PostgresStore) MarkConversationRead(conversationID, userID int) error {
+	_, err := s.db.Exec(
+		"UPDATE messages SET read_at = NOW() WHERE conversation_id = $1 AND sender_id != $2 AND read_at IS NULL",
+		conversationID, userID,
+	)
+	return err
+}
+
+func (s *PostgresStore) CountUnreadMessages(userID int) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM messages m
+		JOIN conversations c ON m.conversation_id = c.id
+		WHERE (c.user_a_id = $1 OR c.user_b_id = $1) AND m.sender_id != $1 AND m.read_at IS NULL`,
+		userID).Scan(&count)
+	return count, err
+}
+
 // ---- Utility ----
 
 func (s *PostgresStore) Close() error  { return s.db.Close() }

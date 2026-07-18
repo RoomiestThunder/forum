@@ -191,6 +191,27 @@ func sqliteSchema(db *sql.DB) error {
 		FOREIGN KEY(user_id) REFERENCES users(id),
 		UNIQUE(provider, provider_user_id)
 	);
+	CREATE TABLE IF NOT EXISTS conversations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_a_id INTEGER NOT NULL,
+		user_b_id INTEGER NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_message_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_a_id) REFERENCES users(id),
+		FOREIGN KEY(user_b_id) REFERENCES users(id),
+		UNIQUE(user_a_id, user_b_id)
+	);
+	CREATE TABLE IF NOT EXISTS messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		conversation_id INTEGER NOT NULL,
+		sender_id INTEGER NOT NULL,
+		content TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		read_at DATETIME,
+		FOREIGN KEY(conversation_id) REFERENCES conversations(id),
+		FOREIGN KEY(sender_id) REFERENCES users(id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 	`)
 	if err != nil {
 		return err
@@ -1072,6 +1093,129 @@ func (s *SQLiteStore) MarkNotificationRead(id, userID int) error {
 func (s *SQLiteStore) MarkAllNotificationsRead(userID int) error {
 	_, err := s.db.Exec("UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0", userID)
 	return err
+}
+
+// ---- Direct message operations ----
+
+// GetOrCreateConversation returns the conversation id between two users,
+// creating it if needed. The pair is stored with the lower user id first so
+// the (user_a_id, user_b_id) unique constraint catches both call orders.
+func (s *SQLiteStore) GetOrCreateConversation(userA, userB int) (int, error) {
+	a, b := userA, userB
+	if a > b {
+		a, b = b, a
+	}
+	if _, err := s.db.Exec("INSERT OR IGNORE INTO conversations (user_a_id, user_b_id) VALUES (?, ?)", a, b); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	var id int
+	if err := s.db.QueryRow("SELECT id FROM conversations WHERE user_a_id = ? AND user_b_id = ?", a, b).Scan(&id); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return id, nil
+}
+
+func (s *SQLiteStore) ListConversations(userID int) ([]*models.Conversation, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			c.id,
+			CASE WHEN c.user_a_id = ? THEN ub.username ELSE ua.username END,
+			CASE WHEN c.user_a_id = ? THEN ub.avatar_url ELSE ua.avatar_url END,
+			COALESCE((SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1), ''),
+			c.last_message_at,
+			(SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND sender_id != ? AND read_at IS NULL)
+		FROM conversations c
+		JOIN users ua ON c.user_a_id = ua.id
+		JOIN users ub ON c.user_b_id = ub.id
+		WHERE c.user_a_id = ? OR c.user_b_id = ?
+		ORDER BY c.last_message_at DESC, c.id DESC`, userID, userID, userID, userID, userID)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var convos []*models.Conversation
+	for rows.Next() {
+		var c models.Conversation
+		if err := rows.Scan(&c.ID, &c.OtherUsername, &c.OtherAvatarURL, &c.LastMessage, &c.LastMessageAt, &c.UnreadCount); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		convos = append(convos, &c)
+	}
+	return convos, rows.Err()
+}
+
+func (s *SQLiteStore) GetMessages(conversationID, limit, offset int) ([]*models.Message, error) {
+	rows, err := s.db.Query(`
+		SELECT m.id, m.conversation_id, m.sender_id, u.username, m.content, m.created_at, m.read_at
+		FROM messages m
+		JOIN users u ON m.sender_id = u.id
+		WHERE m.conversation_id = ?
+		ORDER BY m.created_at DESC, m.id DESC
+		LIMIT ? OFFSET ?`, conversationID, limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var messages []*models.Message
+	for rows.Next() {
+		var m models.Message
+		var readAt sql.NullTime
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Sender, &m.Content, &m.CreatedAt, &readAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		if readAt.Valid {
+			t := readAt.Time
+			m.ReadAt = &t
+		}
+		messages = append(messages, &m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	// Queried newest-first for a stable LIMIT/OFFSET window; reverse for
+	// chronological (oldest-first) rendering.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, nil
+}
+
+func (s *SQLiteStore) CreateMessage(conversationID, senderID int, content string) (*models.Message, error) {
+	res, err := s.db.Exec("INSERT INTO messages (conversation_id, sender_id, content) VALUES (?, ?, ?)", conversationID, senderID, content)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	id, _ := res.LastInsertId()
+	if _, err := s.db.Exec("UPDATE conversations SET last_message_at = CURRENT_TIMESTAMP WHERE id = ?", conversationID); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	var m models.Message
+	err = s.db.QueryRow(`
+		SELECT m.id, m.conversation_id, m.sender_id, u.username, m.content, m.created_at
+		FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.id = ?`, id).
+		Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Sender, &m.Content, &m.CreatedAt)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return &m, nil
+}
+
+func (s *SQLiteStore) MarkConversationRead(conversationID, userID int) error {
+	_, err := s.db.Exec(
+		"UPDATE messages SET read_at = CURRENT_TIMESTAMP WHERE conversation_id = ? AND sender_id != ? AND read_at IS NULL",
+		conversationID, userID,
+	)
+	return err
+}
+
+func (s *SQLiteStore) CountUnreadMessages(userID int) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM messages m
+		JOIN conversations c ON m.conversation_id = c.id
+		WHERE (c.user_a_id = ? OR c.user_b_id = ?) AND m.sender_id != ? AND m.read_at IS NULL`,
+		userID, userID, userID).Scan(&count)
+	return count, err
 }
 
 // ---- Utility ----

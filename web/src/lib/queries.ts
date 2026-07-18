@@ -9,7 +9,9 @@ import type {
   AdminUser,
   Category,
   Comment,
+  Conversation,
   CurrentUser,
+  DirectMessage,
   Notification,
   Post,
   PublicProfile,
@@ -354,6 +356,44 @@ export function useAdminDeleteComment(postId: number) {
   return useMutation({
     mutationFn: (commentId: number) => api(`/admin/comments/${commentId}`, { method: 'DELETE' }),
     onSuccess: () => invalidate(postId),
+  })
+}
+
+export function useConversations() {
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
+  return useQuery({
+    queryKey: ['conversations'],
+    queryFn: () => api<Conversation[] | null>('/messages'),
+    enabled: loggedIn,
+  })
+}
+
+export function useUnreadMessageCount() {
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
+  return useQuery({
+    queryKey: ['messages', 'unread-count'],
+    queryFn: () => api<{ count: number }>('/messages/unread-count'),
+    enabled: loggedIn,
+  })
+}
+
+export function useThread(username: string) {
+  return useQuery({
+    queryKey: ['messages', username],
+    queryFn: () => api<{ messages: DirectMessage[] | null }>(`/messages/${username}`),
+    enabled: username !== '',
+  })
+}
+
+export function useSendMessage(username: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (content: string) =>
+      api<DirectMessage>(`/messages/${username}`, { method: 'POST', body: JSON.stringify({ content }) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['messages', username] })
+      void qc.invalidateQueries({ queryKey: ['conversations'] })
+    },
   })
 }
 

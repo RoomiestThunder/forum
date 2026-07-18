@@ -4,7 +4,7 @@ import { useAuth } from '../stores/auth'
 
 /**
  * Opens a websocket to the notification hub and, on any message, invalidates
- * the notification queries so the bell refetches. The message payload is
+ * the relevant queries so the UI refetches. The message payload is
  * intentionally not trusted as the source of truth (see the notify() helper
  * server-side) - a socket message just means "something happened, go check."
  */
@@ -23,8 +23,19 @@ export function useNotificationSocket() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       socket = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws?token=${accessToken}`)
 
-      socket.onmessage = () => {
-        void qc.invalidateQueries({ queryKey: ['notifications'] })
+      socket.onmessage = (event) => {
+        let type: string | undefined
+        try {
+          type = (JSON.parse(event.data as string) as { type?: string }).type
+        } catch {
+          // Malformed payload - fall through to the generic refresh below.
+        }
+        if (type === 'new_message') {
+          void qc.invalidateQueries({ queryKey: ['conversations'] })
+          void qc.invalidateQueries({ queryKey: ['messages'] })
+        } else {
+          void qc.invalidateQueries({ queryKey: ['notifications'] })
+        }
       }
 
       socket.onclose = () => {

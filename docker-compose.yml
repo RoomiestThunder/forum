@@ -45,6 +45,7 @@ services:
       - ./migrations/005_roles_and_reports.up.sql:/docker-entrypoint-initdb.d/005_roles_and_reports.sql
       - ./migrations/006_account_security.up.sql:/docker-entrypoint-initdb.d/006_account_security.sql
       - ./migrations/007_drop_sessions.up.sql:/docker-entrypoint-initdb.d/007_drop_sessions.sql
+      - ./migrations/008_direct_messages.up.sql:/docker-entrypoint-initdb.d/008_direct_messages.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U forum"]
       interval: 5s

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, Outlet, useNavigate } from 'react-router'
 import { Moon, Sun, PenSquare, LogOut, MessagesSquare, Search, ShieldCheck } from 'lucide-react'
+import MessagesIcon from './MessagesIcon'
 import NotificationBell from './NotificationBell'
 import SearchBox from './SearchBox'
 import { logout } from '../lib/api'
@@ -70,6 +71,7 @@ export default function Layout() {
                   <ShieldCheck size={18} />
                 </Link>
               )}
+              <MessagesIcon />
               <NotificationBell />
               <Link
                 to="/new"

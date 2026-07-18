@@ -1000,3 +1000,91 @@ func TestOAuthUserCreationAndLinking(t *testing.T) {
 		t.Fatalf("expected oauth login to link to existing account %d, got %d", existingID, u4.ID)
 	}
 }
+
+func TestDirectMessages(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	bob := registerUser(t, srv.URL, "bob")
+
+	// Can't message yourself.
+	resp := postJSON(t, srv.URL+"/api/v1/messages/alice", alice, map[string]any{"content": "hi me"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("message self: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Messaging a nonexistent user 404s.
+	resp = postJSON(t, srv.URL+"/api/v1/messages/nobody", alice, map[string]any{"content": "hi"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("message nonexistent user: want 404, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Empty content is rejected.
+	resp = postJSON(t, srv.URL+"/api/v1/messages/bob", alice, map[string]any{"content": "   "})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty message: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, srv.URL+"/api/v1/messages/bob", alice, map[string]any{"content": "hey bob"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("send message: want 201, got %d", resp.StatusCode)
+	}
+	msg := decode[map[string]any](t, resp)
+	if msg["content"] != "hey bob" || msg["sender"] != "alice" {
+		t.Fatalf("unexpected message shape: %+v", msg)
+	}
+
+	// bob's conversation list shows alice, with the preview and an unread count.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/messages", bob, nil)
+	convos := decode[[]map[string]any](t, resp)
+	if len(convos) != 1 || convos[0]["other_username"] != "alice" || convos[0]["last_message"] != "hey bob" {
+		t.Fatalf("bob's conversations: want 1 with alice, got %+v", convos)
+	}
+	if convos[0]["unread_count"] != float64(1) {
+		t.Fatalf("unread count: want 1, got %+v", convos[0]["unread_count"])
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/messages/unread-count", bob, nil)
+	count := decode[map[string]any](t, resp)
+	if count["count"] != float64(1) {
+		t.Fatalf("unread-count: want 1, got %+v", count)
+	}
+
+	// Reading the thread marks it read.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/messages/alice", bob, nil)
+	thread := decode[map[string]any](t, resp)
+	messages, _ := thread["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("bob's thread with alice: want 1 message, got %+v", thread)
+	}
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/messages/unread-count", bob, nil)
+	count = decode[map[string]any](t, resp)
+	if count["count"] != float64(0) {
+		t.Fatalf("unread-count after read: want 0, got %+v", count)
+	}
+
+	// alice's own view of the same conversation doesn't need marking read
+	// and shows the same thread.
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/messages/bob", alice, nil)
+	thread = decode[map[string]any](t, resp)
+	messages, _ = thread["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("alice's thread with bob: want 1 message, got %+v", thread)
+	}
+
+	// A reply from bob lands in the same conversation, not a second one.
+	resp = postJSON(t, srv.URL+"/api/v1/messages/alice", bob, map[string]any{"content": "hey alice"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("reply: want 201, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodGet, srv.URL+"/api/v1/messages", alice, nil)
+	convos = decode[[]map[string]any](t, resp)
+	if len(convos) != 1 || convos[0]["other_username"] != "bob" || convos[0]["last_message"] != "hey alice" {
+		t.Fatalf("alice's conversations after reply: want 1 with bob, got %+v", convos)
+	}
+}

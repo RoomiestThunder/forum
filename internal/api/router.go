@@ -155,6 +155,14 @@ func (s *Server) Mount(root chi.Router) {
 			})
 		})
 
+		r.Route("/messages", func(r chi.Router) {
+			r.Use(s.requireAuth)
+			r.Get("/", s.listConversations)
+			r.Get("/unread-count", s.unreadMessageCount)
+			r.Get("/{username}", s.getConversationWithUser)
+			r.Post("/{username}", s.sendMessage)
+		})
+
 		r.Route("/notifications", func(r chi.Router) {
 			r.Use(s.requireAuth)
 			r.Get("/", s.listNotifications)

@@ -97,6 +97,14 @@ type Store interface {
 	MarkNotificationRead(id, userID int) error
 	MarkAllNotificationsRead(userID int) error
 
+	// Direct message operations
+	GetOrCreateConversation(userA, userB int) (int, error)
+	ListConversations(userID int) ([]*models.Conversation, error)
+	GetMessages(conversationID, limit, offset int) ([]*models.Message, error)
+	CreateMessage(conversationID, senderID int, content string) (*models.Message, error)
+	MarkConversationRead(conversationID, userID int) error
+	CountUnreadMessages(userID int) (int, error)
+
 	// Utility
 	Close() error
 	Health() error

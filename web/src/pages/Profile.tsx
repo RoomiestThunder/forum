@@ -1,4 +1,4 @@
-import { Loader2, Settings } from 'lucide-react'
+import { Loader2, Mail, Settings } from 'lucide-react'
 import { Link, useParams } from 'react-router'
 import PostCard from '../components/PostCard'
 import { usePostsFeed, useProfile } from '../lib/queries'
@@ -10,6 +10,7 @@ export default function Profile() {
   const { data: profile, isLoading, isError } = useProfile(username)
   const feed = usePostsFeed({ author: username })
   const isOwn = useAuth((s) => s.username) === username
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
 
   if (isLoading) {
     return (
@@ -49,6 +50,15 @@ export default function Profile() {
                 className="rounded p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
               >
                 <Settings size={16} />
+              </Link>
+            )}
+            {!isOwn && loggedIn && (
+              <Link
+                to={`/messages/${profile.username}`}
+                className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                <Mail size={13} />
+                Message
               </Link>
             )}
           </div>
