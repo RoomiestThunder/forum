@@ -1,36 +1,35 @@
 package api
 
 import (
+	"errors"
 	"net/http"
-	"strings"
 )
 
-// handleWS upgrades the connection to WebSocket.
-// Expects Authorization: Bearer <token> header or ?token= query param.
+var errAccountSuspended = errors.New("account suspended")
+
+// handleWS upgrades the connection to a WebSocket. Authentication happens in
+// the first frame (see the websocket package), not in the URL.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if s.hub == nil {
 		http.Error(w, "websocket not configured", http.StatusServiceUnavailable)
 		return
 	}
+	s.hub.ServeWS(w, r, s.authenticateWS)
+}
 
-	// Extract token from header or query param
-	tokenStr := r.URL.Query().Get("token")
-	if tokenStr == "" {
-		auth := r.Header.Get("Authorization")
-		if strings.HasPrefix(auth, "Bearer ") {
-			tokenStr = auth[7:]
-		}
-	}
-	if tokenStr == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	claims, err := s.jwt.ValidateAccessToken(tokenStr)
+// authenticateWS applies the same rules as requireAuth: a valid access token
+// for an account that still exists and hasn't been banned.
+func (s *Server) authenticateWS(token string) (int, error) {
+	claims, err := s.jwt.ValidateAccessToken(token)
 	if err != nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
-		return
+		return 0, err
 	}
-
-	s.hub.ServeWS(w, r, claims.UserID)
+	user, err := s.store.GetUserByID(claims.UserID)
+	if err != nil {
+		return 0, err
+	}
+	if user.Banned {
+		return 0, errAccountSuspended
+	}
+	return user.ID, nil
 }

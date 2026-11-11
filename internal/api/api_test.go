@@ -12,6 +12,7 @@ import (
 
 	"forum/internal/auth"
 	"forum/internal/database"
+	ws "forum/internal/websocket"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -35,6 +36,13 @@ func newTestServerWithStore(t *testing.T) (*httptest.Server, database.Store) {
 // configured differently (e.g. behind a trusted proxy).
 func newTestServerWithOptions(t *testing.T, opts Options) (*httptest.Server, database.Store) {
 	t.Helper()
+	return newTestServerFull(t, opts, nil)
+}
+
+// newTestServerFull additionally takes a websocket hub (nil disables the
+// websocket endpoint, as in production without one).
+func newTestServerFull(t *testing.T, opts Options, hub *ws.Hub) (*httptest.Server, database.Store) {
+	t.Helper()
 	db, err := database.InitSQLite(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +52,7 @@ func newTestServerWithOptions(t *testing.T, opts Options) (*httptest.Server, dat
 
 	jwtManager := auth.NewManager("test-secret", 15*time.Minute, 24*time.Hour)
 	r := chi.NewRouter()
-	NewServer(store, jwtManager, nil, nil, nil, nil, opts).Mount(r)
+	NewServer(store, jwtManager, nil, nil, hub, nil, opts).Mount(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

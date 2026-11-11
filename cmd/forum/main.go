@@ -91,9 +91,7 @@ func main() {
 
 	// ---- WebSocket Hub ----
 	hub := ws.NewHub(logger)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go hub.Run(ctx)
+	defer hub.Close()
 
 	// ---- Mailer (SMTP optional; logs instead of sending when unset) ----
 	mailer := mail.New(cfg.SMTP, logger)

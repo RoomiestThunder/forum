@@ -94,6 +94,10 @@ func (s *Server) setUserBanned(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "failed to update user", http.StatusInternalServerError)
 		return
 	}
+	// A ban must also cut off the live connection, not just future requests.
+	if body.Banned && s.hub != nil {
+		s.hub.Disconnect(userID)
+	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
