@@ -72,6 +72,35 @@ func (s *Server) getConversationWithUser(w http.ResponseWriter, r *http.Request)
 	jsonResponse(w, map[string]interface{}{"messages": messages}, http.StatusOK)
 }
 
+// canMessage reports whether senderID may message recipientID, writing the
+// error response itself when not. Blocks apply in both directions: the blocked
+// user can't write to the blocker, and the blocker can't write to someone they
+// blocked without unblocking first. Existing history stays readable.
+//
+// The recipient's block is reported generically so a blocked user can't tell
+// "blocked" apart from any other reason a message might be refused.
+func (s *Server) canMessage(w http.ResponseWriter, senderID, recipientID int) bool {
+	blockedByRecipient, err := s.store.IsBlocked(recipientID, senderID)
+	if err != nil {
+		jsonError(w, "failed to send message", http.StatusInternalServerError)
+		return false
+	}
+	if blockedByRecipient {
+		jsonError(w, "you can't message this user", http.StatusForbidden)
+		return false
+	}
+	blockedBySender, err := s.store.IsBlocked(senderID, recipientID)
+	if err != nil {
+		jsonError(w, "failed to send message", http.StatusInternalServerError)
+		return false
+	}
+	if blockedBySender {
+		jsonError(w, "you have blocked this user; unblock them to send a message", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	otherID, ok := s.otherParticipant(w, r)
 	if !ok {
@@ -90,6 +119,9 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := userIDFromCtx(r)
+	if !s.canMessage(w, userID, otherID) {
+		return
+	}
 	convID, err := s.store.GetOrCreateConversation(userID, otherID)
 	if err != nil {
 		jsonError(w, "failed to load conversation", http.StatusInternalServerError)

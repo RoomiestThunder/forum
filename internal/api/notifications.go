@@ -14,7 +14,14 @@ import (
 // sparse (just enough to identify what changed) - clients react to it by
 // refetching the notification list/count rather than trusting the socket
 // message to carry the full, correctly-shaped record.
-func (s *Server) notify(recipientID int, notifType string, payload map[string]interface{}) {
+//
+// actorID is who caused the event. If the recipient has blocked them, the
+// notification is dropped: a block that still let the blocked user ping you
+// with mentions and likes would be only half a block.
+func (s *Server) notify(recipientID, actorID int, notifType string, payload map[string]interface{}) {
+	if blocked, err := s.store.IsBlocked(recipientID, actorID); err == nil && blocked {
+		return
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return

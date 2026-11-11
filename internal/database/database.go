@@ -108,6 +108,12 @@ type Store interface {
 	MarkConversationRead(conversationID, userID int) error
 	CountUnreadMessages(userID int) (int, error)
 
+	// Block operations
+	BlockUser(blockerID, blockedID int) error
+	UnblockUser(blockerID, blockedID int) error
+	IsBlocked(blockerID, blockedID int) (bool, error)
+	ListBlockedUsers(blockerID int) ([]*models.UserSummary, error)
+
 	// Utility
 	Close() error
 	Health() error

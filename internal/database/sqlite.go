@@ -213,6 +213,15 @@ func sqliteSchema(db *sql.DB) error {
 		FOREIGN KEY(sender_id) REFERENCES users(id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+	CREATE TABLE IF NOT EXISTS user_blocks (
+		blocker_id INTEGER NOT NULL,
+		blocked_id INTEGER NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (blocker_id, blocked_id),
+		FOREIGN KEY(blocker_id) REFERENCES users(id),
+		FOREIGN KEY(blocked_id) REFERENCES users(id),
+		CHECK (blocker_id <> blocked_id)
+	);
 	`)
 	if err != nil {
 		return err
@@ -1264,6 +1273,69 @@ func (s *SQLiteStore) CountUnreadMessages(userID int) (int, error) {
 		WHERE (c.user_a_id = ? OR c.user_b_id = ?) AND m.sender_id != ? AND m.read_at IS NULL`,
 		userID, userID, userID).Scan(&count)
 	return count, err
+}
+
+// ---- Block operations ----
+
+// BlockUser records that blockerID has blocked blockedID. Blocking someone
+// already blocked is a no-op, so the endpoint is safe to retry.
+//
+// ON CONFLICT DO NOTHING rather than INSERT OR IGNORE: the latter would also
+// swallow a CHECK violation, silently "succeeding" at blocking yourself where
+// PostgreSQL rejects it.
+func (s *SQLiteStore) BlockUser(blockerID, blockedID int) error {
+	_, err := s.db.Exec("INSERT INTO user_blocks (blocker_id, blocked_id) VALUES (?, ?) ON CONFLICT DO NOTHING", blockerID, blockedID)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) UnblockUser(blockerID, blockedID int) error {
+	_, err := s.db.Exec("DELETE FROM user_blocks WHERE blocker_id = ? AND blocked_id = ?", blockerID, blockedID)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	return nil
+}
+
+// IsBlocked reports whether blockerID has blocked blockedID. It is directional:
+// A blocking B says nothing about B blocking A.
+func (s *SQLiteStore) IsBlocked(blockerID, blockedID int) (bool, error) {
+	var blocked bool
+	err := s.db.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ?)",
+		blockerID, blockedID,
+	).Scan(&blocked)
+	if err != nil {
+		return false, apperrors.DatabaseError(err)
+	}
+	return blocked, nil
+}
+
+// ListBlockedUsers returns the users blockerID has blocked, most recent first.
+func (s *SQLiteStore) ListBlockedUsers(blockerID int) ([]*models.UserSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT u.id, u.username, u.avatar_url
+		FROM user_blocks b JOIN users u ON u.id = b.blocked_id
+		WHERE b.blocker_id = ?
+		ORDER BY b.created_at DESC, u.id DESC`, blockerID)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var users []*models.UserSummary
+	for rows.Next() {
+		var u models.UserSummary
+		if err := rows.Scan(&u.ID, &u.Username, &u.AvatarURL); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		users = append(users, &u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return users, nil
 }
 
 // ---- Utility ----

@@ -172,6 +172,13 @@ func (s *Server) Mount(root chi.Router) {
 			r.With(s.limitByUser(limitMessage)).Post("/{username}", s.sendMessage)
 		})
 
+		r.Route("/blocks", func(r chi.Router) {
+			r.Use(s.requireAuth)
+			r.Get("/", s.listBlocks)
+			r.Put("/{username}", s.blockUser)
+			r.Delete("/{username}", s.unblockUser)
+		})
+
 		r.Route("/notifications", func(r chi.Router) {
 			r.Use(s.requireAuth)
 			r.Get("/", s.listNotifications)

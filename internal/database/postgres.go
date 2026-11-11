@@ -1089,6 +1089,65 @@ func (s *PostgresStore) CountUnreadMessages(userID int) (int, error) {
 	return count, err
 }
 
+// ---- Block operations ----
+
+// BlockUser records that blockerID has blocked blockedID. Blocking someone
+// already blocked is a no-op, so the endpoint is safe to retry.
+func (s *PostgresStore) BlockUser(blockerID, blockedID int) error {
+	_, err := s.db.Exec("INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", blockerID, blockedID)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) UnblockUser(blockerID, blockedID int) error {
+	_, err := s.db.Exec("DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2", blockerID, blockedID)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	return nil
+}
+
+// IsBlocked reports whether blockerID has blocked blockedID. It is directional:
+// A blocking B says nothing about B blocking A.
+func (s *PostgresStore) IsBlocked(blockerID, blockedID int) (bool, error) {
+	var blocked bool
+	err := s.db.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2)",
+		blockerID, blockedID,
+	).Scan(&blocked)
+	if err != nil {
+		return false, apperrors.DatabaseError(err)
+	}
+	return blocked, nil
+}
+
+// ListBlockedUsers returns the users blockerID has blocked, most recent first.
+func (s *PostgresStore) ListBlockedUsers(blockerID int) ([]*models.UserSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT u.id, u.username, u.avatar_url
+		FROM user_blocks b JOIN users u ON u.id = b.blocked_id
+		WHERE b.blocker_id = $1
+		ORDER BY b.created_at DESC, u.id DESC`, blockerID)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer rows.Close()
+	var users []*models.UserSummary
+	for rows.Next() {
+		var u models.UserSummary
+		if err := rows.Scan(&u.ID, &u.Username, &u.AvatarURL); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		users = append(users, &u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return users, nil
+}
+
 // ---- Utility ----
 
 func (s *PostgresStore) Close() error  { return s.db.Close() }
