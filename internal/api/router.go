@@ -167,6 +167,7 @@ func (s *Server) Mount(root chi.Router) {
 
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireAdmin)
+				r.Get("/audit", s.listAudit)
 				r.Get("/users", s.listUsers)
 				r.Post("/users/{id}/role", s.setUserRole)
 				r.Post("/users/{id}/ban", s.setUserBanned)

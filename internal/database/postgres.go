@@ -1185,6 +1185,41 @@ func (s *PostgresStore) CountUnreadMessages(userID int) (int, error) {
 	return count, err
 }
 
+// ---- Audit log operations ----
+
+// CreateAuditEntry records a staff action. details must be a JSON object.
+func (s *PostgresStore) CreateAuditEntry(actorID int, action, targetType string, targetID int, details string) error {
+	_, err := s.db.Exec(
+		"INSERT INTO audit_log (actor_id, action, target_type, target_id, details) VALUES ($1, $2, $3, $4, $5)",
+		actorID, action, targetType, targetID, details,
+	)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	return nil
+}
+
+// ListAuditEntries returns recorded actions, newest first.
+func (s *PostgresStore) ListAuditEntries(limit, offset int) ([]*models.AuditEntry, error) {
+	rows, err := s.db.Query(`
+		SELECT a.id, a.actor_id, u.username, a.action, a.target_type, a.target_id, a.details, a.created_at
+		FROM audit_log a JOIN users u ON u.id = a.actor_id
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return scanAuditEntries(rows)
+}
+
+func (s *PostgresStore) CountAuditEntries() (int, error) {
+	var n int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM audit_log").Scan(&n); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return n, nil
+}
+
 // ---- Block operations ----
 
 // BlockUser records that blockerID has blocked blockedID. Blocking someone

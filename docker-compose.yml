@@ -49,6 +49,7 @@ services:
       - ./migrations/009_post_drafts.up.sql:/docker-entrypoint-initdb.d/009_post_drafts.sql
       - ./migrations/010_user_blocks.up.sql:/docker-entrypoint-initdb.d/010_user_blocks.sql
       - ./migrations/011_threaded_comments.up.sql:/docker-entrypoint-initdb.d/011_threaded_comments.sql
+      - ./migrations/012_audit_log.up.sql:/docker-entrypoint-initdb.d/012_audit_log.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U forum"]
       interval: 5s

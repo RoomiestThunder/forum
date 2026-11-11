@@ -113,6 +113,11 @@ type Store interface {
 	MarkConversationRead(conversationID, userID int) error
 	CountUnreadMessages(userID int) (int, error)
 
+	// Audit log operations
+	CreateAuditEntry(actorID int, action, targetType string, targetID int, details string) error
+	ListAuditEntries(limit, offset int) ([]*models.AuditEntry, error)
+	CountAuditEntries() (int, error)
+
 	// Block operations
 	BlockUser(blockerID, blockedID int) error
 	UnblockUser(blockerID, blockedID int) error

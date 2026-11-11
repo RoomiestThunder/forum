@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type User struct {
 	ID            int       `json:"id"`
@@ -156,4 +159,18 @@ type PaginatedPosts struct {
 	Page       int     `json:"page"`
 	TotalPages int     `json:"total_pages"`
 	TotalCount int     `json:"total_count"`
+}
+
+// AuditEntry is one recorded staff action. Details is a JSON object holding a
+// snapshot of whatever was acted on, so the entry stays meaningful after the
+// target is deleted.
+type AuditEntry struct {
+	ID         int             `json:"id"`
+	ActorID    int             `json:"actor_id"`
+	Actor      string          `json:"actor"`
+	Action     string          `json:"action"`
+	TargetType string          `json:"target_type"`
+	TargetID   int             `json:"target_id"`
+	Details    json.RawMessage `json:"details"`
+	CreatedAt  time.Time       `json:"created_at"`
 }

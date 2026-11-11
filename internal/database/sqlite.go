@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -217,6 +218,17 @@ func sqliteSchema(db *sql.DB) error {
 		FOREIGN KEY(sender_id) REFERENCES users(id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+	CREATE TABLE IF NOT EXISTS audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		actor_id INTEGER NOT NULL,
+		action TEXT NOT NULL,
+		target_type TEXT NOT NULL,
+		target_id INTEGER NOT NULL,
+		details TEXT NOT NULL DEFAULT '{}',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(actor_id) REFERENCES users(id)
+	);
+	CREATE INDEX IF NOT EXISTS audit_log_created_idx ON audit_log(created_at DESC, id DESC);
 	CREATE TABLE IF NOT EXISTS user_blocks (
 		blocker_id INTEGER NOT NULL,
 		blocked_id INTEGER NOT NULL,
@@ -1453,6 +1465,60 @@ func (s *SQLiteStore) CountUnreadMessages(userID int) (int, error) {
 		WHERE (c.user_a_id = ? OR c.user_b_id = ?) AND m.sender_id != ? AND m.read_at IS NULL`,
 		userID, userID, userID).Scan(&count)
 	return count, err
+}
+
+// ---- Audit log operations ----
+
+// CreateAuditEntry records a staff action. details must be a JSON object.
+func (s *SQLiteStore) CreateAuditEntry(actorID int, action, targetType string, targetID int, details string) error {
+	_, err := s.db.Exec(
+		"INSERT INTO audit_log (actor_id, action, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		actorID, action, targetType, targetID, details, time.Now(),
+	)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	return nil
+}
+
+// ListAuditEntries returns recorded actions, newest first.
+func (s *SQLiteStore) ListAuditEntries(limit, offset int) ([]*models.AuditEntry, error) {
+	rows, err := s.db.Query(`
+		SELECT a.id, a.actor_id, u.username, a.action, a.target_type, a.target_id, a.details, a.created_at
+		FROM audit_log a JOIN users u ON u.id = a.actor_id
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return scanAuditEntries(rows)
+}
+
+func (s *SQLiteStore) CountAuditEntries() (int, error) {
+	var n int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM audit_log").Scan(&n); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	return n, nil
+}
+
+// scanAuditEntries is shared by both stores: the row shape is identical.
+func scanAuditEntries(rows *sql.Rows) ([]*models.AuditEntry, error) {
+	defer rows.Close()
+	var entries []*models.AuditEntry
+	for rows.Next() {
+		var e models.AuditEntry
+		var details string
+		if err := rows.Scan(&e.ID, &e.ActorID, &e.Actor, &e.Action, &e.TargetType, &e.TargetID, &details, &e.CreatedAt); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+		e.Details = json.RawMessage(details)
+		entries = append(entries, &e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return entries, nil
 }
 
 // ---- Block operations ----

@@ -183,3 +183,14 @@ CREATE TABLE IF NOT EXISTS user_blocks (
     PRIMARY KEY (blocker_id, blocked_id),
     CHECK (blocker_id <> blocked_id)
 );
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id          SERIAL PRIMARY KEY,
+    actor_id    INTEGER NOT NULL REFERENCES users(id),
+    action      TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id   INTEGER NOT NULL,
+    details     TEXT NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS audit_log_created_idx ON audit_log(created_at DESC, id DESC);

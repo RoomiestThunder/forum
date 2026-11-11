@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -29,12 +31,12 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	const pageSize = 25
 	users, err := s.store.ListUsers(pageSize, (page-1)*pageSize)
 	if err != nil {
-		jsonError(w, "failed to load users", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load users")
 		return
 	}
 	total, err := s.store.CountUsers()
 	if err != nil {
-		jsonError(w, "failed to load users", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load users")
 		return
 	}
 	out := make([]adminUserDTO, len(users))
@@ -66,10 +68,22 @@ func (s *Server) setUserRole(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "you can't remove your own admin access", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SetUserRole(userID, body.IsAdmin, body.IsModerator); err != nil {
-		jsonError(w, "failed to update role", http.StatusInternalServerError)
+	target, err := s.store.GetUserByID(userID)
+	if err != nil {
+		s.storeError(w, r, err, "update role")
 		return
 	}
+	if err := s.store.SetUserRole(userID, body.IsAdmin, body.IsModerator); err != nil {
+		s.storeError(w, r, err, "update role")
+		return
+	}
+	s.audit(r, auditUserRole, "user", userID, map[string]interface{}{
+		"username":      target.Username,
+		"was_admin":     target.IsAdmin,
+		"was_moderator": target.IsModerator,
+		"is_admin":      body.IsAdmin,
+		"is_moderator":  body.IsModerator,
+	})
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
@@ -90,14 +104,24 @@ func (s *Server) setUserBanned(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	target, err := s.store.GetUserByID(userID)
+	if err != nil {
+		s.storeError(w, r, err, "update user")
+		return
+	}
 	if err := s.store.SetUserBanned(userID, body.Banned); err != nil {
-		jsonError(w, "failed to update user", http.StatusInternalServerError)
+		s.storeError(w, r, err, "update user")
 		return
 	}
 	// A ban must also cut off the live connection, not just future requests.
 	if body.Banned && s.hub != nil {
 		s.hub.Disconnect(userID)
 	}
+	action := auditUserUnban
+	if body.Banned {
+		action = auditUserBan
+	}
+	s.audit(r, action, "user", userID, map[string]interface{}{"username": target.Username})
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
@@ -114,13 +138,23 @@ func (s *Server) setPostPinned(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	post, err := s.store.GetPost(postID)
+	if err != nil {
+		s.storeError(w, r, err, "update post")
+		return
+	}
 	if err := s.store.SetPostPinned(postID, body.Pinned); err != nil {
-		jsonError(w, "failed to update post", http.StatusInternalServerError)
+		s.storeError(w, r, err, "update post")
 		return
 	}
 	if s.cache != nil {
 		_ = s.cache.InvalidatePosts(r.Context())
 	}
+	action := auditPostUnpin
+	if body.Pinned {
+		action = auditPostPin
+	}
+	s.audit(r, action, "post", postID, map[string]interface{}{"title": post.Title})
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
@@ -130,13 +164,26 @@ func (s *Server) adminDeletePost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid post id", http.StatusBadRequest)
 		return
 	}
+	// Read the post first: once it is deleted, the log is the only place its
+	// title and author survive.
+	post, err := s.store.GetPost(postID)
+	if err != nil {
+		s.storeError(w, r, err, "delete post")
+		return
+	}
 	if err := s.store.AdminDeletePost(postID); err != nil {
-		jsonError(w, "failed to delete post", http.StatusInternalServerError)
+		s.storeError(w, r, err, "delete post")
 		return
 	}
 	if s.cache != nil {
 		_ = s.cache.InvalidatePosts(r.Context())
 	}
+	s.audit(r, auditPostDelete, "post", postID, map[string]interface{}{
+		"title":     post.Title,
+		"author":    post.Author,
+		"author_id": post.UserID,
+		"excerpt":   excerpt(post.Content),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -146,12 +193,25 @@ func (s *Server) adminDeleteComment(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid comment id", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.AdminDeleteComment(commentID); err != nil {
-		jsonError(w, "failed to delete comment", http.StatusInternalServerError)
+	comment, err := s.store.GetComment(commentID)
+	if err != nil {
+		s.storeError(w, r, err, "delete comment")
 		return
 	}
+	if err := s.store.AdminDeleteComment(commentID); err != nil {
+		s.storeError(w, r, err, "delete comment")
+		return
+	}
+	s.audit(r, auditCommentDelete, "comment", commentID, map[string]interface{}{
+		"post_id":   comment.PostID,
+		"author":    comment.Author,
+		"author_id": comment.UserID,
+		"excerpt":   excerpt(comment.Content),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
+
+const maxReportReasonLength = 500
 
 // createReport lets any authenticated user flag a post or comment.
 func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
@@ -172,13 +232,27 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "target_id is required", http.StatusBadRequest)
 		return
 	}
-	if len(body.Reason) == 0 || len(body.Reason) > 500 {
-		jsonError(w, "reason must be 1-500 chars", http.StatusBadRequest)
+	if n := utf8.RuneCountInString(body.Reason); n == 0 || n > maxReportReasonLength {
+		jsonError(w, fmt.Sprintf("reason must be 1-%d characters", maxReportReasonLength), http.StatusBadRequest)
 		return
 	}
+
+	// A report against something that doesn't exist would sit in the queue
+	// forever with nothing for a moderator to look at.
+	var lookupErr error
+	if body.TargetType == "post" {
+		_, lookupErr = s.store.GetPost(body.TargetID)
+	} else {
+		_, lookupErr = s.store.GetComment(body.TargetID)
+	}
+	if lookupErr != nil {
+		s.storeError(w, r, lookupErr, "file report")
+		return
+	}
+
 	id, err := s.store.CreateReport(userIDFromCtx(r), body.TargetType, body.TargetID, body.Reason)
 	if err != nil {
-		jsonError(w, "failed to file report", http.StatusInternalServerError)
+		s.storeError(w, r, err, "file report")
 		return
 	}
 	jsonResponse(w, map[string]int{"id": id}, http.StatusCreated)
@@ -196,7 +270,7 @@ func (s *Server) listReports(w http.ResponseWriter, r *http.Request) {
 	const pageSize = 25
 	reports, err := s.store.ListReports(status, pageSize, (page-1)*pageSize)
 	if err != nil {
-		jsonError(w, "failed to load reports", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load reports")
 		return
 	}
 	jsonResponse(w, reports, http.StatusOK)
@@ -209,8 +283,9 @@ func (s *Server) resolveReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.ResolveReport(id); err != nil {
-		jsonError(w, "failed to resolve report", http.StatusInternalServerError)
+		s.storeError(w, r, err, "resolve report")
 		return
 	}
+	s.audit(r, auditReportResolve, "report", id, nil)
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
