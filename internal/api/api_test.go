@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,7 +44,7 @@ func newTestServerWithOptions(t *testing.T, opts Options) (*httptest.Server, dat
 
 // newTestServerFull additionally takes a websocket hub (nil disables the
 // websocket endpoint, as in production without one).
-func newTestServerFull(t *testing.T, opts Options, hub *ws.Hub) (*httptest.Server, database.Store) {
+func newTestServerFull(t *testing.T, opts Options, hub *ws.Hub, configure ...func(*Server)) (*httptest.Server, database.Store) {
 	t.Helper()
 	// SQLite by default; TEST_STORE=postgres runs the whole suite against
 	// PostgreSQL (see dbtest).
@@ -50,7 +52,11 @@ func newTestServerFull(t *testing.T, opts Options, hub *ws.Hub) (*httptest.Serve
 
 	jwtManager := auth.NewManager("test-secret", 15*time.Minute, 24*time.Hour)
 	r := chi.NewRouter()
-	NewServer(store, jwtManager, nil, nil, hub, nil, opts).Mount(r)
+	server := NewServer(store, jwtManager, nil, nil, hub, nil, opts)
+	for _, apply := range configure {
+		apply(server) // lets a test swap a collaborator before routes are mounted
+	}
+	server.Mount(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -1248,3 +1254,6 @@ func TestMentions(t *testing.T) {
 		}
 	}
 }
+
+// quietLogger discards output, for tests that deliberately provoke logged errors.
+func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

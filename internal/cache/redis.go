@@ -121,17 +121,3 @@ func (c *Cache) Allow(ctx context.Context, key string, limit int, window time.Du
 	}
 	return true, 0, nil
 }
-
-// ---- WebSocket pub/sub ----
-
-func (c *Cache) Publish(ctx context.Context, channel string, msg interface{}) error {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	return c.client.Publish(ctx, channel, data).Err()
-}
-
-func (c *Cache) Subscribe(ctx context.Context, channel string) *redis.PubSub {
-	return c.client.Subscribe(ctx, channel)
-}

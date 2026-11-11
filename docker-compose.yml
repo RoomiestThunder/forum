@@ -12,6 +12,9 @@ services:
       MINIO_ACCESS_KEY: "minioadmin"
       MINIO_SECRET_KEY: "minioadmin"
       MINIO_BUCKET: "forum"
+      # The app reaches MinIO as minio:9000, which a browser can't resolve, so
+      # tell it where the browser can fetch uploaded files from.
+      MINIO_PUBLIC_URL: "http://localhost:9000/forum"
       JWT_SECRET: "change-me-in-production"
       SMTP_HOST: "mailpit"
       SMTP_PORT: "1025"

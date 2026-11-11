@@ -36,13 +36,16 @@ var (
 	limitContent = limitPolicy{name: "content", limit: 20, window: time.Minute}
 	// limitMessage throttles direct messages, per user.
 	limitMessage = limitPolicy{name: "message", limit: 30, window: time.Minute}
+	// limitUpload throttles file uploads, per user: each one is up to 5 MB of
+	// bandwidth and storage.
+	limitUpload = limitPolicy{name: "upload", limit: 10, window: time.Minute}
 	// limitSocket throttles websocket upgrades, per IP. The upgrade sits
 	// outside the API router, so it is not covered by limitGlobal.
 	limitSocket = limitPolicy{name: "socket", limit: 30, window: time.Minute}
 )
 
 var allLimitPolicies = []limitPolicy{
-	limitGlobal, limitAuth, limitEmail, limitContent, limitMessage, limitSocket,
+	limitGlobal, limitAuth, limitEmail, limitContent, limitMessage, limitUpload, limitSocket,
 }
 
 // newLocalLimiters builds the in-process limiter for every policy. They are

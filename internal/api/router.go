@@ -38,7 +38,7 @@ type Server struct {
 	store   database.Store
 	jwt     *auth.Manager
 	cache   *cache.Cache
-	storage *storage.Client
+	storage fileStore
 	hub     *ws.Hub
 	mailer  *mail.Mailer
 	baseURL string
@@ -69,7 +69,6 @@ func NewServer(
 		store:   store,
 		jwt:     jwt,
 		cache:   redisCache,
-		storage: storageClient,
 		hub:     hub,
 		mailer:  mailer,
 		baseURL: opts.BaseURL,
@@ -80,6 +79,12 @@ func NewServer(
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
+	}
+	// Assigned only when present: putting a nil *storage.Client into the
+	// interface would make `s.storage == nil` false and the "not configured"
+	// checks would never trigger.
+	if storageClient != nil {
+		s.storage = storageClient
 	}
 	if opts.GitHubClientID != "" && opts.GitHubClientSecret != "" {
 		s.githubOAuth = &oauth2.Config{
@@ -128,7 +133,7 @@ func (s *Server) Mount(root chi.Router) {
 
 		r.With(s.requireAuth).Get("/me", s.me)
 		r.With(s.requireAuth).Put("/me/bio", s.updateBio)
-		r.With(s.requireAuth).Post("/me/avatar", s.uploadAvatar)
+		r.With(s.requireAuth, s.limitByUser(limitUpload)).Post("/me/avatar", s.uploadAvatar)
 		r.Get("/users/search", s.searchUsers)
 		r.Get("/users/{username}", s.profile)
 
@@ -198,7 +203,7 @@ func (s *Server) Mount(root chi.Router) {
 		})
 
 		r.Get("/search", s.search)
-		r.With(s.requireAuth).Post("/upload", s.upload)
+		r.With(s.requireAuth, s.limitByUser(limitUpload)).Post("/upload", s.upload)
 		r.Get("/categories", s.listCategories)
 		r.Get("/health", s.health)
 	})

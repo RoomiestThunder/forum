@@ -1,36 +1,59 @@
+// Package storage stores user-uploaded images in an S3-compatible bucket
+// (MinIO in development and in docker-compose).
 package storage
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"forum/internal/metrics"
 
+	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 const maxUploadSize = 5 * 1024 * 1024 // 5 MB
 
-var allowedTypes = map[string]bool{
-	"image/jpeg": true,
-	"image/png":  true,
-	"image/gif":  true,
-	"image/webp": true,
+// Upload errors that are the uploader's doing, as opposed to a storage
+// failure; callers use them to choose between a 4xx and a 5xx.
+var (
+	ErrUnsupportedType = errors.New("unsupported file type")
+	ErrTooLarge        = errors.New("file too large")
+)
+
+// allowedTypes maps each accepted content type to the extension its objects are
+// stored under. The extension comes from the detected type, never from the
+// uploader's filename, which is arbitrary text.
+var allowedTypes = map[string]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/gif":  ".gif",
+	"image/webp": ".webp",
 }
 
 type Client struct {
 	minio      *minio.Client
 	bucketName string
+	// publicBase is the URL prefix under which objects can be fetched by a
+	// browser, without a trailing slash.
+	publicBase string
 }
 
-func New(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Client, error) {
+// New connects to the bucket, creating it if needed.
+//
+// publicURL is where browsers reach the bucket's objects, e.g.
+// "https://cdn.example.com/forum" or "http://localhost:9000/forum". It has to
+// be separate from the endpoint because they often differ: inside
+// docker-compose the app talks to "minio:9000", a name no browser can resolve.
+// When empty it is derived from the endpoint and useSSL, which is right when
+// the endpoint is directly reachable.
+func New(endpoint, accessKey, secretKey, bucket string, useSSL bool, publicURL string) (*Client, error) {
 	mc, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: useSSL,
@@ -53,60 +76,72 @@ func New(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Client, e
 		_ = mc.SetBucketPolicy(ctx, bucket, policy)
 	}
 
-	return &Client{minio: mc, bucketName: bucket}, nil
+	return &Client{minio: mc, bucketName: bucket, publicBase: publicBase(publicURL, endpoint, bucket, useSSL)}, nil
 }
 
-// Upload validates, streams, and stores a file.
-// Pass size=-1 to let MinIO measure the actual byte count (recommended; avoids
-// trusting caller-supplied metadata). Returns (objectKey, contentType, url, actualSize, error).
-func (c *Client) Upload(ctx context.Context, r io.Reader, filename string, size int64) (objectKey, contentType, url string, actualSize int64, err error) {
-	// Wrap reader to enforce the hard size limit regardless of declared size.
-	limited := &limitedReader{r: r, remaining: maxUploadSize + 1}
-
-	// Read first 512 bytes for magic-byte content-type detection.
-	buf := make([]byte, 512)
-	n, err := limited.Read(buf)
-	if err != nil && err != io.EOF {
-		return "", "", "", 0, fmt.Errorf("read header: %w", err)
+// publicBase returns the URL prefix objects are served from.
+func publicBase(publicURL, endpoint, bucket string, useSSL bool) string {
+	if publicURL != "" {
+		return strings.TrimRight(publicURL, "/")
 	}
-	buf = buf[:n]
-	contentType = http.DetectContentType(buf)
+	scheme := "http"
+	if useSSL {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s/%s", scheme, endpoint, bucket)
+}
 
-	if !allowedTypes[contentType] {
-		return "", "", "", 0, fmt.Errorf("unsupported file type: %s", contentType)
+// Upload validates, streams and stores an image, returning its object key,
+// detected content type, public URL and measured size.
+//
+// The type is decided from the file's own first bytes, not from its name or any
+// header the client sent, and the size is counted as it streams rather than
+// taken from client-supplied metadata (hence the -1 passed to PutObject).
+func (c *Client) Upload(ctx context.Context, r io.Reader) (objectKey, contentType, url string, size int64, err error) {
+	contentType, body, limited, err := inspect(r)
+	if err != nil {
+		return "", "", "", 0, err
 	}
 
-	// Reconstruct the reader with consumed bytes prepended.
-	combined := io.MultiReader(bytes.NewReader(buf), limited)
-
-	ext := strings.ToLower(filepath.Ext(filename))
-	objectKey = fmt.Sprintf("uploads/%d%s", time.Now().UnixNano(), ext)
-
-	// Pass -1 so MinIO measures actual bytes; size parameter is untrusted.
-	info, err := c.minio.PutObject(ctx, c.bucketName, objectKey, combined, -1, minio.PutObjectOptions{
+	objectKey = "uploads/" + uuid.NewString() + allowedTypes[contentType]
+	info, err := c.minio.PutObject(ctx, c.bucketName, objectKey, body, -1, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	if limited.exceeded {
+		// Too large: PutObject has stored the first max+1 bytes by now. Remove them.
 		_ = c.minio.RemoveObject(ctx, c.bucketName, objectKey, minio.RemoveObjectOptions{})
-		return "", "", "", 0, fmt.Errorf("file too large (max 5MB)")
+		return "", "", "", 0, fmt.Errorf("%w: the limit is %d MB", ErrTooLarge, maxUploadSize>>20)
 	}
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("put object: %w", err)
 	}
-	actualSize = info.Size
-	metrics.UploadSizeBytes.Observe(float64(actualSize))
+	metrics.UploadSizeBytes.Observe(float64(info.Size))
 
-	url = fmt.Sprintf("http://%s/%s/%s", c.minio.EndpointURL().Host, c.bucketName, objectKey)
-	return objectKey, contentType, url, actualSize, nil
+	return objectKey, contentType, c.publicBase + "/" + objectKey, info.Size, nil
 }
 
-// PresignedURL generates a temporary download URL.
-func (c *Client) PresignedURL(ctx context.Context, objectKey string, expiry time.Duration) (string, error) {
-	url, err := c.minio.PresignedGetObject(ctx, c.bucketName, objectKey, expiry, nil)
-	if err != nil {
-		return "", err
+// inspect reads the start of r to detect its content type and, if that is an
+// allowed one, returns a reader over the whole stream (the sniffed bytes
+// included), capped at maxUploadSize. limited.exceeded reports whether the cap
+// was hit once the stream has been consumed.
+func inspect(r io.Reader) (contentType string, body io.Reader, limited *limitedReader, err error) {
+	// One byte beyond the maximum, so that a file of exactly maxUploadSize bytes
+	// is accepted and one a byte larger is detected as too large.
+	limited = &limitedReader{r: r, remaining: maxUploadSize + 1}
+
+	// 512 bytes is what http.DetectContentType looks at.
+	head := make([]byte, 512)
+	n, err := io.ReadFull(limited, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", nil, nil, fmt.Errorf("read upload: %w", err)
 	}
-	return url.String(), nil
+	head = head[:n]
+
+	contentType = http.DetectContentType(head)
+	if _, ok := allowedTypes[contentType]; !ok {
+		return "", nil, nil, fmt.Errorf("%w: only JPEG, PNG, GIF and WebP images are accepted", ErrUnsupportedType)
+	}
+	return contentType, io.MultiReader(bytes.NewReader(head), limited), limited, nil
 }
 
 // Delete removes an object from storage.

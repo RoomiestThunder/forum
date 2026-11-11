@@ -75,6 +75,10 @@ type MinIOConfig struct {
 	SecretAccessKey string
 	BucketName      string
 	UseSSL          bool
+	// PublicURL is where browsers fetch uploaded objects, e.g.
+	// "http://localhost:9000/forum". Empty means "derive it from the endpoint",
+	// which is wrong whenever the endpoint is an internal name like minio:9000.
+	PublicURL string
 }
 
 // SMTPConfig configures transactional email. When Host is empty the mailer
@@ -134,6 +138,7 @@ func LoadConfig() *Config {
 			SecretAccessKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
 			BucketName:      getEnv("MINIO_BUCKET", "forum"),
 			UseSSL:          getEnvBool("MINIO_USE_SSL", false),
+			PublicURL:       getEnv("MINIO_PUBLIC_URL", ""),
 		},
 		SMTP: SMTPConfig{
 			Host: getEnv("SMTP_HOST", ""),

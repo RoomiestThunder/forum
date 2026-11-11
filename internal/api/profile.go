@@ -20,7 +20,7 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 	}
 	postCount, err := s.store.CountPostsByUser(user.ID)
 	if err != nil {
-		jsonError(w, "failed to load profile", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load profile")
 		return
 	}
 	jsonResponse(w, models.PublicProfile{
@@ -42,7 +42,7 @@ func (s *Server) searchUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	users, err := s.store.SearchUsers(q, 6)
 	if err != nil {
-		jsonError(w, "search failed", http.StatusInternalServerError)
+		s.storeError(w, r, err, "search users")
 		return
 	}
 	jsonResponse(w, users, http.StatusOK)
@@ -64,7 +64,7 @@ func (s *Server) updateBio(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.UpdateUserBio(userID, body.Bio); err != nil {
-		jsonError(w, "failed to update bio", http.StatusInternalServerError)
+		s.storeError(w, r, err, "update bio")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "updated"}, http.StatusOK)
@@ -73,37 +73,14 @@ func (s *Server) updateBio(w http.ResponseWriter, r *http.Request) {
 // uploadAvatar uploads a new avatar image and attaches it to the
 // authenticated user.
 func (s *Server) uploadAvatar(w http.ResponseWriter, r *http.Request) {
-	if s.storage == nil {
-		jsonError(w, "file storage not configured", http.StatusServiceUnavailable)
+	f, ok := s.receiveUpload(w, r)
+	if !ok {
 		return
 	}
-
-	const hardLimit = 6 * 1024 * 1024
-	r.Body = http.MaxBytesReader(w, r.Body, hardLimit)
-	if err := r.ParseMultipartForm(5 * 1024 * 1024); err != nil {
-		jsonError(w, "file too large or invalid form data", http.StatusBadRequest)
+	if err := s.store.UpdateUserAvatar(userIDFromCtx(r), f.url); err != nil {
+		s.discardUpload(r, f)
+		s.storeError(w, r, err, "save avatar")
 		return
 	}
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		jsonError(w, "file field required", http.StatusBadRequest)
-		return
-	}
-	defer func() { _ = file.Close() }()
-
-	userID := userIDFromCtx(r)
-
-	_, _, fileURL, _, err := s.storage.Upload(r.Context(), file, header.Filename, -1)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if err := s.store.UpdateUserAvatar(userID, fileURL); err != nil {
-		jsonError(w, "failed to save avatar", http.StatusInternalServerError)
-		return
-	}
-
-	jsonResponse(w, map[string]string{"avatar_url": fileURL}, http.StatusOK)
+	jsonResponse(w, map[string]string{"avatar_url": f.url}, http.StatusOK)
 }

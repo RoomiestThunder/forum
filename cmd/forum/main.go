@@ -85,6 +85,7 @@ func main() {
 		cfg.MinIO.SecretAccessKey,
 		cfg.MinIO.BucketName,
 		cfg.MinIO.UseSSL,
+		cfg.MinIO.PublicURL,
 	); err == nil {
 		storageClient = sc
 		log.Println("MinIO connected")
