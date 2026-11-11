@@ -130,13 +130,16 @@ func main() {
 	apiServer.Mount(root)
 
 	// Everything else is the React SPA (embedded build of web/dist).
-	spaHandler, err := newSPAHandler()
+	spa, built, err := newSPAHandler()
 	if err != nil {
 		log.Fatalf("spa: %v", err)
 	}
+	if !built {
+		logger.Warn("no frontend build embedded: serving the API only; run `npm run build` in web/ and rebuild, or use `npm run dev`")
+	}
 	root.Group(func(r chi.Router) {
 		r.Use(metrics.Middleware)
-		r.Handle("/*", spaHandler)
+		r.Handle("/*", spa)
 	})
 
 	srv := &http.Server{
