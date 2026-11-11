@@ -1,16 +1,22 @@
 import { useState } from 'react'
 import { Loader2, Shield, ShieldCheck, ShieldOff } from 'lucide-react'
 import { Link, Navigate } from 'react-router'
+import Pager from '../components/Pager'
+import { describeAudit, auditExcerpt } from '../lib/audit'
 import {
+  AUDIT_PAGE_SIZE,
   useAdminReports,
   useAdminUsers,
+  useAuditLog,
   useMe,
   useResolveReport,
   useSetUserBanned,
   useSetUserRole,
 } from '../lib/queries'
-import { timeAgo } from '../lib/time'
+import { fullDate, timeAgo } from '../lib/time'
 import type { AdminUser } from '../lib/types'
+
+const USERS_PAGE_SIZE = 25 // matches the API
 
 function UsersTab() {
   const [page, setPage] = useState(1)
@@ -104,17 +110,7 @@ function UsersTab() {
         </tbody>
       </table>
 
-      {data && data.total > data.users.length * page && (
-        <div className="mt-3 flex justify-center">
-          <button
-            type="button"
-            onClick={() => setPage((p) => p + 1)}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Load more
-          </button>
-        </div>
-      )}
+      {data && <Pager page={page} pageSize={USERS_PAGE_SIZE} total={data.total} onChange={setPage} />}
     </div>
   )
 }
@@ -194,9 +190,92 @@ function ReportsTab() {
   )
 }
 
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={`border-b-2 px-1 pb-2 text-sm font-medium transition ${
+        active
+          ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+          : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function AuditTab() {
+  const [page, setPage] = useState(1)
+  const { data, isLoading } = useAuditLog(page)
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="animate-spin text-zinc-400" />
+      </div>
+    )
+  }
+
+  const entries = data?.entries ?? []
+
+  return (
+    <div>
+      {entries.length === 0 && (
+        <p className="py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+          No moderation actions recorded yet.
+        </p>
+      )}
+      <ul className="space-y-2">
+        {entries.map((entry) => {
+          const excerpt = auditExcerpt(entry)
+          return (
+            <li
+              key={entry.id}
+              className="rounded-lg border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p>
+                  <Link to={`/u/${entry.actor}`} className="font-medium hover:underline">
+                    {entry.actor}
+                  </Link>{' '}
+                  {describeAudit(entry)}
+                </p>
+                <time
+                  dateTime={entry.created_at}
+                  title={fullDate(entry.created_at)}
+                  className="shrink-0 text-xs text-zinc-400"
+                >
+                  {timeAgo(entry.created_at)}
+                </time>
+              </div>
+              {excerpt && (
+                <p className="mt-1.5 border-l-2 border-zinc-200 pl-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                  {excerpt}
+                </p>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {data && <Pager page={page} pageSize={AUDIT_PAGE_SIZE} total={data.total} onChange={setPage} />}
+    </div>
+  )
+}
+
 export default function Admin() {
   const { data: me, isLoading } = useMe()
-  const [tab, setTab] = useState<'reports' | 'users'>('reports')
+  const [tab, setTab] = useState<'reports' | 'users' | 'audit'>('reports')
 
   if (isLoading) {
     return (
@@ -214,34 +293,24 @@ export default function Admin() {
     <div>
       <h1 className="text-2xl font-bold">Admin</h1>
       <div className="mt-4 mb-4 flex gap-2 border-b border-zinc-200 dark:border-zinc-800">
-        <button
-          type="button"
-          onClick={() => setTab('reports')}
-          className={`border-b-2 px-1 pb-2 text-sm font-medium transition ${
-            tab === 'reports'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-              : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-          }`}
-        >
+        <TabButton active={tab === 'reports'} onClick={() => setTab('reports')}>
           Reports
-        </button>
+        </TabButton>
         {me.is_admin && (
-          <button
-            type="button"
-            onClick={() => setTab('users')}
-            className={`border-b-2 px-1 pb-2 text-sm font-medium transition ${
-              tab === 'users'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-            }`}
-          >
-            Users
-          </button>
+          <>
+            <TabButton active={tab === 'users'} onClick={() => setTab('users')}>
+              Users
+            </TabButton>
+            <TabButton active={tab === 'audit'} onClick={() => setTab('audit')}>
+              Audit log
+            </TabButton>
+          </>
         )}
       </div>
 
       {tab === 'reports' && <ReportsTab />}
       {tab === 'users' && me.is_admin && <UsersTab />}
+      {tab === 'audit' && me.is_admin && <AuditTab />}
     </div>
   )
 }

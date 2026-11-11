@@ -7,6 +7,7 @@ import {
 import { api, uploadFile } from './api'
 import type {
   AdminUser,
+  AuditEntry,
   Category,
   Comment,
   Conversation,
@@ -335,6 +336,16 @@ export function useSetUserBanned() {
     mutationFn: ({ userId, banned }: { userId: number; banned: boolean }) =>
       api(`/admin/users/${userId}/ban`, { method: 'POST', body: JSON.stringify({ banned }) }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  })
+}
+
+export const AUDIT_PAGE_SIZE = 50
+
+export function useAuditLog(page: number) {
+  return useQuery({
+    queryKey: ['admin', 'audit', page],
+    queryFn: () => api<{ entries: AuditEntry[]; total: number; page: number }>(`/admin/audit?page=${page}`),
+    placeholderData: (prev) => prev,
   })
 }
 

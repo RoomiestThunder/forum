@@ -158,3 +158,16 @@ export interface DirectMessage {
   created_at: string
   read_at?: string
 }
+
+export interface AuditEntry {
+  id: number
+  actor_id: number
+  actor: string
+  /** e.g. "post.delete", "user.ban" - see describeAudit for the full set. */
+  action: string
+  target_type: string
+  target_id: number
+  /** A snapshot of what was acted on; its keys depend on the action. */
+  details: Record<string, unknown>
+  created_at: string
+}
