@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	apperrors "forum/internal/errors"
 	"forum/internal/models"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -64,9 +66,18 @@ func (s *PostgresStore) CreateUser(email, username, passwordHash string) (int, e
 		email, username, passwordHash, userCount == 0,
 	).Scan(&id)
 	if err != nil {
+		if isPgUniqueViolation(err) {
+			return 0, errAccountTaken()
+		}
 		return 0, apperrors.DatabaseError(err)
 	}
 	return id, nil
+}
+
+// isPgUniqueViolation reports whether err is a unique_violation (SQLSTATE 23505).
+func isPgUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation
 }
 
 const pgUserColumns = "id, email, username, password, COALESCE(avatar_url,''), COALESCE(bio,''), is_admin, is_moderator, banned, email_verified, created_at"

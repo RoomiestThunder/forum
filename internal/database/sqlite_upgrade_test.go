@@ -109,3 +109,44 @@ func TestSQLiteUpgradeIsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// usernames was never unique, so an existing database can hold duplicates. The
+// unique index can't be built over them, so opening such a database has to
+// resolve them first: the oldest account keeps the name.
+func TestSQLiteUpgradeRenamesDuplicateUsernames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dupes.db")
+
+	legacy, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(legacySQLiteSchema + `
+		INSERT INTO users (email, username, password) VALUES ('second@example.com', 'OLDUSER', 'hash');
+		INSERT INTO users (email, username, password) VALUES ('third@example.com', 'olduser', 'hash');
+		INSERT INTO users (email, username, password) VALUES ('other@example.com', 'someoneelse', 'hash');`)
+	if err != nil {
+		t.Fatalf("build legacy database: %v", err)
+	}
+	_ = legacy.Close()
+
+	db, err := database.InitSQLite(path)
+	if err != nil {
+		t.Fatalf("a database with duplicate usernames must still open: %v", err)
+	}
+	store := database.NewSQLiteStoreWithoutLogger(db)
+	t.Cleanup(func() { _ = store.Close() })
+
+	first, err := store.GetUserByUsername("olduser")
+	if err != nil || first.Email != "old@example.com" {
+		t.Fatalf("the oldest account must keep the name, got %+v (%v)", first, err)
+	}
+	for id, want := range map[int]string{2: "OLDUSER_2", 3: "olduser_3", 4: "someoneelse"} {
+		u, err := store.GetUserByID(id)
+		if err != nil || u.Username != want {
+			t.Errorf("user %d: username = %q, want %q (%v)", id, u.Username, want, err)
+		}
+	}
+	if _, err := store.CreateUser("new@example.com", "OLDUSER", "hash"); err == nil {
+		t.Error("the name must be taken now that the index exists")
+	}
+}

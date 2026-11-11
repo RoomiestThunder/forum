@@ -48,23 +48,29 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "email, username and password are required", http.StatusBadRequest)
 		return
 	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
-	if err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
+	if msg := validateRegistration(req); msg != "" {
+		jsonError(w, msg, http.StatusBadRequest)
 		return
 	}
 
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
+	if err != nil {
+		s.internalError(w, r, err, "create account")
+		return
+	}
+
+	// A taken email or username comes back from the store as a 409; any other
+	// failure is a real error and must not be reported as "already taken".
 	userID, err := s.store.CreateUser(req.Email, req.Username, string(hash))
 	if err != nil {
-		jsonError(w, "email or username already taken", http.StatusConflict)
+		s.storeError(w, r, err, "create account")
 		return
 	}
 	s.sendVerificationEmail(userID, req.Email)
 
 	tokens, err := s.issueTokens(userID, req.Username)
 	if err != nil {
-		jsonError(w, "token generation failed", http.StatusInternalServerError)
+		s.internalError(w, r, err, "issue tokens")
 		return
 	}
 
@@ -95,6 +101,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		user, err = s.store.GetUserByUsername(req.Login)
 	}
 	if err != nil {
+		// Do the same amount of work as for a wrong password, so the response
+		// time doesn't reveal that the account doesn't exist.
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
 		jsonError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}

@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,7 +12,7 @@ import (
 	apperrors "forum/internal/errors"
 	"forum/internal/models"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 )
 
 type SQLiteStore struct {
@@ -253,6 +254,19 @@ func sqliteSchema(db *sql.DB) error {
 	`); err != nil {
 		return err
 	}
+	// username was never unique. Rename any existing duplicates (the oldest
+	// account keeps the name; later ones get their id appended) so the index
+	// can be built; see migration 013.
+	if _, err := db.Exec(`
+	UPDATE users SET username = username || '_' || id
+	WHERE EXISTS (
+		SELECT 1 FROM users o
+		WHERE LOWER(o.username) = LOWER(users.username) AND o.id < users.id
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username));
+	`); err != nil {
+		return err
+	}
 
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM categories").Scan(&count); err != nil {
@@ -263,6 +277,12 @@ func sqliteSchema(db *sql.DB) error {
 		return err
 	}
 	return nil
+}
+
+// isSQLiteUniqueViolation reports whether err is a UNIQUE constraint failure.
+func isSQLiteUniqueViolation(err error) bool {
+	var sqliteErr sqlite3.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
 }
 
 // sqliteLateColumns are columns that were added to a table after its first
@@ -323,6 +343,9 @@ func (s *SQLiteStore) CreateUser(email, username, passwordHash string) (int, err
 		email, username, passwordHash, userCount == 0,
 	)
 	if err != nil {
+		if isSQLiteUniqueViolation(err) {
+			return 0, errAccountTaken()
+		}
 		return 0, apperrors.DatabaseError(err)
 	}
 	id, _ := res.LastInsertId()

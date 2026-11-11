@@ -111,8 +111,10 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if len(body.NewPassword) < 6 || len(body.NewPassword) > 32 {
-		jsonError(w, "password must be 6-32 characters", http.StatusBadRequest)
+	// Checked before the token is consumed, so a rejected password doesn't
+	// burn a single-use reset link.
+	if msg := validatePassword(body.NewPassword); msg != "" {
+		jsonError(w, msg, http.StatusBadRequest)
 		return
 	}
 	userID, err := s.store.ConsumePasswordResetToken(body.Token)
@@ -122,11 +124,11 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcryptCost)
 	if err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
+		s.internalError(w, r, err, "reset password")
 		return
 	}
 	if err := s.store.UpdateUserPassword(userID, string(hash)); err != nil {
-		jsonError(w, "failed to update password", http.StatusInternalServerError)
+		s.storeError(w, r, err, "reset password")
 		return
 	}
 	// A password reset is a good time to invalidate every existing session -
