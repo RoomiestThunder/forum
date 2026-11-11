@@ -15,7 +15,7 @@ import (
 func (s *Server) listBlocks(w http.ResponseWriter, r *http.Request) {
 	users, err := s.store.ListBlockedUsers(userIDFromCtx(r))
 	if err != nil {
-		jsonError(w, "failed to load blocked users", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load blocked users")
 		return
 	}
 	if users == nil {
@@ -47,7 +47,7 @@ func (s *Server) blockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.BlockUser(userIDFromCtx(r), targetID); err != nil {
-		jsonError(w, "failed to block user", http.StatusInternalServerError)
+		s.storeError(w, r, err, "block user")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
@@ -59,7 +59,7 @@ func (s *Server) unblockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.UnblockUser(userIDFromCtx(r), targetID); err != nil {
-		jsonError(w, "failed to unblock user", http.StatusInternalServerError)
+		s.storeError(w, r, err, "unblock user")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)

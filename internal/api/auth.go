@@ -121,7 +121,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := s.issueTokens(user.ID, user.Username)
 	if err != nil {
-		jsonError(w, "token generation failed", http.StatusInternalServerError)
+		s.storeError(w, r, err, "issue tokens")
 		return
 	}
 

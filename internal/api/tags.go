@@ -10,7 +10,7 @@ func (s *Server) searchTags(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("q")
 	tags, err := s.store.SearchTags(prefix, 10)
 	if err != nil {
-		jsonError(w, "failed to load tags", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load tags")
 		return
 	}
 	jsonResponse(w, tags, http.StatusOK)
@@ -27,7 +27,7 @@ func (s *Server) toggleBookmark(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.ToggleBookmark(body.PostID, userID, body.Bookmarked); err != nil {
-		jsonError(w, "failed to update bookmark", http.StatusInternalServerError)
+		s.storeError(w, r, err, "update bookmark")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)

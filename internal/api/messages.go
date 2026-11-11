@@ -13,7 +13,7 @@ func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r)
 	convos, err := s.store.ListConversations(userID)
 	if err != nil {
-		jsonError(w, "failed to load conversations", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load conversations")
 		return
 	}
 	jsonResponse(w, convos, http.StatusOK)
@@ -23,7 +23,7 @@ func (s *Server) unreadMessageCount(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r)
 	count, err := s.store.CountUnreadMessages(userID)
 	if err != nil {
-		jsonError(w, "failed to load count", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load count")
 		return
 	}
 	jsonResponse(w, map[string]int{"count": count}, http.StatusOK)
@@ -55,7 +55,7 @@ func (s *Server) getConversationWithUser(w http.ResponseWriter, r *http.Request)
 	userID := userIDFromCtx(r)
 	convID, err := s.store.GetOrCreateConversation(userID, otherID)
 	if err != nil {
-		jsonError(w, "failed to load conversation", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load conversation")
 		return
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -65,7 +65,7 @@ func (s *Server) getConversationWithUser(w http.ResponseWriter, r *http.Request)
 	const pageSize = 50
 	messages, err := s.store.GetMessages(convID, pageSize, (page-1)*pageSize)
 	if err != nil {
-		jsonError(w, "failed to load messages", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load messages")
 		return
 	}
 	_ = s.store.MarkConversationRead(convID, userID)
@@ -79,10 +79,10 @@ func (s *Server) getConversationWithUser(w http.ResponseWriter, r *http.Request)
 //
 // The recipient's block is reported generically so a blocked user can't tell
 // "blocked" apart from any other reason a message might be refused.
-func (s *Server) canMessage(w http.ResponseWriter, senderID, recipientID int) bool {
+func (s *Server) canMessage(w http.ResponseWriter, r *http.Request, senderID, recipientID int) bool {
 	blockedByRecipient, err := s.store.IsBlocked(recipientID, senderID)
 	if err != nil {
-		jsonError(w, "failed to send message", http.StatusInternalServerError)
+		s.storeError(w, r, err, "send message")
 		return false
 	}
 	if blockedByRecipient {
@@ -91,7 +91,7 @@ func (s *Server) canMessage(w http.ResponseWriter, senderID, recipientID int) bo
 	}
 	blockedBySender, err := s.store.IsBlocked(senderID, recipientID)
 	if err != nil {
-		jsonError(w, "failed to send message", http.StatusInternalServerError)
+		s.storeError(w, r, err, "send message")
 		return false
 	}
 	if blockedBySender {
@@ -119,17 +119,17 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := userIDFromCtx(r)
-	if !s.canMessage(w, userID, otherID) {
+	if !s.canMessage(w, r, userID, otherID) {
 		return
 	}
 	convID, err := s.store.GetOrCreateConversation(userID, otherID)
 	if err != nil {
-		jsonError(w, "failed to load conversation", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load conversation")
 		return
 	}
 	msg, err := s.store.CreateMessage(convID, userID, body.Content)
 	if err != nil {
-		jsonError(w, "failed to send message", http.StatusInternalServerError)
+		s.storeError(w, r, err, "send message")
 		return
 	}
 	if s.hub != nil {

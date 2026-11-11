@@ -349,3 +349,32 @@ func TestStoreErrorNeverLeaksInternals(t *testing.T) {
 		})
 	}
 }
+
+// Post edits, deletes and publishes used to answer with the AppError's own
+// string - "[403] Permission denied for action: ..." - and a 500 with the
+// database error text.
+func TestPostPermissionErrorsUseClientFacingMessages(t *testing.T) {
+	srv := newTestServer(t)
+	alice := registerUser(t, srv.URL, "alice")
+	bob := registerUser(t, srv.URL, "bob")
+	post := createPost(t, srv.URL, alice, "Alice's post")
+	url := fmt.Sprintf("%s/api/v1/posts/%d", srv.URL, post)
+
+	for name, req := range map[string]struct {
+		method, path string
+		body         any
+	}{
+		"edit":    {http.MethodPut, url, map[string]string{"title": "hijacked", "content": "x"}},
+		"delete":  {http.MethodDelete, url, nil},
+		"publish": {http.MethodPost, url + "/publish", nil},
+	} {
+		resp := doJSON(t, req.method, req.path, bob, req.body)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s someone else's post: want 403, got %d", name, resp.StatusCode)
+			continue
+		}
+		if msg := decode[map[string]string](t, resp)["error"]; strings.Contains(msg, "[403]") || msg == "" {
+			t.Errorf("%s: the message must be client-facing, got %q", name, msg)
+		}
+	}
+}

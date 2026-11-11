@@ -51,7 +51,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	const pageSize = 20
 	records, err := s.store.GetNotificationsByUser(userID, pageSize, (page-1)*pageSize)
 	if err != nil {
-		jsonError(w, "failed to load notifications", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load notifications")
 		return
 	}
 	out := make([]notificationDTO, len(records))
@@ -71,7 +71,7 @@ func (s *Server) unreadNotificationCount(w http.ResponseWriter, r *http.Request)
 	userID := userIDFromCtx(r)
 	count, err := s.store.CountUnreadNotifications(userID)
 	if err != nil {
-		jsonError(w, "failed to load count", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load count")
 		return
 	}
 	jsonResponse(w, map[string]int{"count": count}, http.StatusOK)
@@ -85,7 +85,7 @@ func (s *Server) markNotificationRead(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.MarkNotificationRead(id, userID); err != nil {
-		jsonError(w, "failed to update notification", http.StatusInternalServerError)
+		s.storeError(w, r, err, "update notification")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
@@ -94,7 +94,7 @@ func (s *Server) markNotificationRead(w http.ResponseWriter, r *http.Request) {
 func (s *Server) markAllNotificationsRead(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r)
 	if err := s.store.MarkAllNotificationsRead(userID); err != nil {
-		jsonError(w, "failed to update notifications", http.StatusInternalServerError)
+		s.storeError(w, r, err, "update notifications")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)

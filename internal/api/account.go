@@ -57,7 +57,7 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.SetEmailVerified(userID); err != nil {
-		jsonError(w, "failed to verify email", http.StatusInternalServerError)
+		s.storeError(w, r, err, "verify email")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "verified"}, http.StatusOK)

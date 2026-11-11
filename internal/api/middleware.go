@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-
-	apperrors "forum/internal/errors"
 )
 
 type contextKey string
@@ -115,12 +113,4 @@ func jsonResponse(w http.ResponseWriter, data interface{}, status int) {
 
 func jsonError(w http.ResponseWriter, message string, status int) {
 	jsonResponse(w, map[string]string{"error": message}, status)
-}
-
-// isPermissionErr returns true for 403-class AppErrors (access denied).
-func isPermissionErr(err error) bool {
-	if ae, ok := err.(*apperrors.AppError); ok {
-		return ae.HTTPStatusCode() == http.StatusForbidden
-	}
-	return false
 }

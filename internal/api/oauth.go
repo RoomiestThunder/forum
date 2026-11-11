@@ -26,7 +26,7 @@ func (s *Server) githubLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	stateBuf := make([]byte, 16)
 	if _, err := rand.Read(stateBuf); err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
+		s.internalError(w, r, err, "start GitHub sign-in")
 		return
 	}
 	state := base64.RawURLEncoding.EncodeToString(stateBuf)
@@ -103,13 +103,13 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) {
 	providerUserID := strconv.Itoa(ghUser.ID)
 	user, err := s.store.FindOrCreateOAuthUser("github", providerUserID, email, ghUser.Login, ghUser.AvatarURL)
 	if err != nil {
-		jsonError(w, "failed to create account", http.StatusInternalServerError)
+		s.storeError(w, r, err, "create account")
 		return
 	}
 
 	tokens, err := s.issueTokens(user.ID, user.Username)
 	if err != nil {
-		jsonError(w, "token generation failed", http.StatusInternalServerError)
+		s.storeError(w, r, err, "issue tokens")
 		return
 	}
 

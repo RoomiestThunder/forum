@@ -77,7 +77,7 @@ func (s *Server) listPosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		jsonError(w, "failed to load posts", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load posts")
 		return
 	}
 	jsonResponse(w, posts, http.StatusOK)
@@ -143,7 +143,7 @@ func (s *Server) createPost(w http.ResponseWriter, r *http.Request) {
 	userID := userIDFromCtx(r)
 	postID, err := s.store.CreatePost(userID, body.Title, body.Content, body.CategoryIDs, body.ImageURL, body.Draft)
 	if err != nil {
-		jsonError(w, "failed to create post", http.StatusInternalServerError)
+		s.storeError(w, r, err, "create post")
 		return
 	}
 	if len(body.Tags) > 0 {
@@ -167,12 +167,11 @@ func (s *Server) publishPost(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.SetPostDraft(id, userID, false); err != nil {
-		status := http.StatusInternalServerError
-		if isPermissionErr(err) {
-			status = http.StatusForbidden
-		}
-		jsonError(w, err.Error(), status)
+
+		s.storeError(w, r, err, "publish post")
+
 		return
+
 	}
 	if s.cache != nil {
 		_ = s.cache.InvalidatePosts(r.Context())
@@ -206,12 +205,11 @@ func (s *Server) updatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.UpdatePost(id, userID, body.Title, body.Content); err != nil {
-		status := http.StatusInternalServerError
-		if isPermissionErr(err) {
-			status = http.StatusForbidden
-		}
-		jsonError(w, err.Error(), status)
+
+		s.storeError(w, r, err, "update post")
+
 		return
+
 	}
 	if s.cache != nil {
 		_ = s.cache.InvalidatePosts(r.Context())
@@ -227,12 +225,11 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.DeletePost(id, userID); err != nil {
-		status := http.StatusInternalServerError
-		if isPermissionErr(err) {
-			status = http.StatusForbidden
-		}
-		jsonError(w, err.Error(), status)
+
+		s.storeError(w, r, err, "delete post")
+
 		return
+
 	}
 	if s.cache != nil {
 		_ = s.cache.InvalidatePosts(r.Context())
@@ -358,7 +355,7 @@ func (s *Server) likePost(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.TogglePostLike(body.PostID, userID, body.IsLike); err != nil {
-		jsonError(w, "like failed", http.StatusInternalServerError)
+		s.storeError(w, r, err, "like")
 		return
 	}
 	// Invalidate cache since like counts changed
@@ -387,7 +384,7 @@ func (s *Server) likeComment(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDFromCtx(r)
 	if err := s.store.ToggleCommentLike(body.CommentID, userID, body.IsLike); err != nil {
-		jsonError(w, "like failed", http.StatusInternalServerError)
+		s.storeError(w, r, err, "like")
 		return
 	}
 	jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
@@ -407,7 +404,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 
 	posts, total, err := s.store.SearchPosts(q, 10, offset)
 	if err != nil {
-		jsonError(w, "search failed", http.StatusInternalServerError)
+		s.storeError(w, r, err, "search")
 		return
 	}
 	jsonResponse(w, map[string]interface{}{
@@ -420,7 +417,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listCategories(w http.ResponseWriter, r *http.Request) {
 	cats, err := s.store.GetCategories()
 	if err != nil {
-		jsonError(w, "failed to load categories", http.StatusInternalServerError)
+		s.storeError(w, r, err, "load categories")
 		return
 	}
 	jsonResponse(w, cats, http.StatusOK)
