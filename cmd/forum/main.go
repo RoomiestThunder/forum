@@ -120,6 +120,7 @@ func main() {
 		BaseURL:            cfg.BaseURL,
 		GitHubClientID:     cfg.GitHub.ClientID,
 		GitHubClientSecret: cfg.GitHub.ClientSecret,
+		TrustProxy:         cfg.Server.TrustProxy,
 	})
 	if cfg.GitHub.ClientID != "" {
 		log.Println("GitHub OAuth configured")

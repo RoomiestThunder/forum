@@ -12,11 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const (
-	postsTTL   = 5 * time.Minute
-	rateWindow = time.Minute
-	rateLimit  = 60 // requests per minute per IP for API
-)
+const postsTTL = 5 * time.Minute
 
 type Cache struct {
 	client *redis.Client
@@ -87,23 +83,43 @@ func (c *Cache) InvalidatePosts(ctx context.Context) error {
 	return nil
 }
 
-// ---- Token bucket rate limiting ----
+// ---- Rate limiting ----
 
-// AllowRequest returns true if the IP is within rate limit, false if exceeded.
-func (c *Cache) AllowRequest(ctx context.Context, ip string) (bool, error) {
-	key := fmt.Sprintf("rate:%s", ip)
-	count, err := c.client.Incr(ctx, key).Result()
+// allowScript is a fixed-window counter. The increment and the expiry are set
+// in one script so they are atomic: with separate INCR and EXPIRE calls, a
+// crash (or a lost connection) between the two leaves a counter with no TTL,
+// which would lock that key out permanently. A counter found without a TTL is
+// repaired here as well. The expiry is armed only when the window opens;
+// re-arming it on every call would let a busy key keep pushing its own reset
+// out and stay limited indefinitely.
+var allowScript = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('PTTL', KEYS[1])
+if count == 1 or ttl < 0 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {count, ttl}
+`)
+
+// Allow counts one request against key and reports whether it is within
+// limit requests per window. When it is not, the returned duration is the
+// time until the window resets. The error is non-nil when Redis could not be
+// consulted; the caller decides whether to fail open or fall back to another
+// limiter.
+func (c *Cache) Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, time.Duration, error) {
+	res, err := allowScript.Run(ctx, c.client, []string{key}, window.Milliseconds()).Int64Slice()
 	if err != nil {
-		return true, nil // fail open
+		return false, 0, fmt.Errorf("rate limit script: %w", err)
 	}
-	// Only arm the expiry on the first request of a window. Re-arming it on
-	// every call would keep pushing the reset out as long as traffic kept
-	// coming in, so a busy IP could stay rate-limited indefinitely instead
-	// of getting a fresh window every minute.
-	if count == 1 {
-		c.client.Expire(ctx, key, rateWindow)
+	if len(res) != 2 {
+		return false, 0, fmt.Errorf("rate limit script: unexpected reply %v", res)
 	}
-	return count <= int64(rateLimit), nil
+	count, ttlMillis := res[0], res[1]
+	if count > int64(limit) {
+		return false, time.Duration(ttlMillis) * time.Millisecond, nil
+	}
+	return true, 0, nil
 }
 
 // ---- WebSocket pub/sub ----

@@ -28,6 +28,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 // "the verification email arrived and contained this token").
 func newTestServerWithStore(t *testing.T) (*httptest.Server, database.Store) {
 	t.Helper()
+	return newTestServerWithOptions(t, Options{BaseURL: "http://localhost"})
+}
+
+// newTestServerWithOptions is the general form, for tests that need a server
+// configured differently (e.g. behind a trusted proxy).
+func newTestServerWithOptions(t *testing.T, opts Options) (*httptest.Server, database.Store) {
+	t.Helper()
 	db, err := database.InitSQLite(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +44,7 @@ func newTestServerWithStore(t *testing.T) (*httptest.Server, database.Store) {
 
 	jwtManager := auth.NewManager("test-secret", 15*time.Minute, 24*time.Hour)
 	r := chi.NewRouter()
-	NewServer(store, jwtManager, nil, nil, nil, nil, Options{BaseURL: "http://localhost"}).Mount(r)
+	NewServer(store, jwtManager, nil, nil, nil, nil, opts).Mount(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

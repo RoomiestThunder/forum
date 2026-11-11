@@ -25,6 +25,10 @@ type Options struct {
 	// GitHubClientID/Secret enable "Sign in with GitHub" when both are set.
 	GitHubClientID     string
 	GitHubClientSecret string
+	// TrustProxy makes rate limiting identify clients by X-Forwarded-For /
+	// X-Real-IP. Enable it only behind a reverse proxy that sets them;
+	// otherwise clients could spoof their way past the limits.
+	TrustProxy bool
 }
 
 type Server struct {
@@ -40,9 +44,11 @@ type Server struct {
 	// providers endpoint check for that instead of a separate bool.
 	githubOAuth *oauth2.Config
 
-	// rateLimiter is used only when Redis is unavailable, so basic abuse
-	// protection still holds even in cache-degraded mode.
-	rateLimiter *appmw.RateLimiter
+	// limiters are the in-process rate limiters, one per policy. They serve as
+	// the limiter when Redis isn't configured and as the fallback when it is
+	// unreachable, so limits keep holding in cache-degraded mode.
+	limiters   map[string]*appmw.RateLimiter
+	trustProxy bool
 }
 
 func NewServer(
@@ -62,9 +68,9 @@ func NewServer(
 		hub:     hub,
 		mailer:  mailer,
 		baseURL: opts.BaseURL,
-	}
-	if redisCache == nil {
-		s.rateLimiter = appmw.NewRateLimiter(1, 60) // ~60 req/min per IP, matches the Redis limit
+
+		limiters:   newLocalLimiters(),
+		trustProxy: opts.TrustProxy,
 	}
 	if opts.GitHubClientID != "" && opts.GitHubClientSecret != "" {
 		s.githubOAuth = &oauth2.Config{
@@ -81,12 +87,13 @@ func NewServer(
 // Mount registers /api/v1/* (including the websocket upgrade) onto root.
 func (s *Server) Mount(root chi.Router) {
 	// The websocket upgrade is a long-lived connection, not a request/response
-	// cycle, so it stays out of the HTTP metrics histogram and rate limiter.
-	root.Get("/api/v1/ws", s.handleWS)
+	// cycle, so it stays out of the HTTP metrics histogram and the global
+	// limiter; the upgrade itself still gets its own per-IP limit.
+	root.With(s.limitByIP(limitSocket)).Get("/api/v1/ws", s.handleWS)
 
 	root.Route("/api/v1", func(r chi.Router) {
 		r.Use(metrics.Middleware)
-		r.Use(s.rateLimit)
+		r.Use(s.limitByIP(limitGlobal))
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "not found", http.StatusNotFound)
 		})
@@ -95,15 +102,15 @@ func (s *Server) Mount(root chi.Router) {
 		})
 
 		r.Route("/auth", func(r chi.Router) {
-			r.Post("/register", s.register)
-			r.Post("/login", s.login)
+			r.With(s.limitByIP(limitAuth)).Post("/register", s.register)
+			r.With(s.limitByIP(limitAuth)).Post("/login", s.login)
 			r.Post("/refresh", s.refreshToken)
 			r.With(s.requireAuth).Post("/logout", s.logout)
 
 			r.Post("/verify-email", s.verifyEmail)
-			r.With(s.requireAuth).Post("/resend-verification", s.resendVerification)
-			r.Post("/forgot-password", s.forgotPassword)
-			r.Post("/reset-password", s.resetPassword)
+			r.With(s.requireAuth, s.limitByIP(limitEmail)).Post("/resend-verification", s.resendVerification)
+			r.With(s.limitByIP(limitEmail)).Post("/forgot-password", s.forgotPassword)
+			r.With(s.limitByIP(limitAuth)).Post("/reset-password", s.resetPassword)
 
 			r.Get("/providers", s.authProviders)
 			r.Get("/github", s.githubLogin)
@@ -118,12 +125,12 @@ func (s *Server) Mount(root chi.Router) {
 
 		r.Route("/posts", func(r chi.Router) {
 			r.With(s.optionalAuth).Get("/", s.listPosts)
-			r.With(s.requireAuth).Post("/", s.createPost)
+			r.With(s.requireAuth, s.limitByUser(limitContent)).Post("/", s.createPost)
 			r.With(s.optionalAuth).Get("/{id}", s.getPost)
 			r.With(s.requireAuth).Put("/{id}", s.updatePost)
 			r.With(s.requireAuth).Delete("/{id}", s.deletePost)
 			r.With(s.requireAuth).Post("/{id}/publish", s.publishPost)
-			r.With(s.requireAuth).Post("/{id}", s.createComment)
+			r.With(s.requireAuth, s.limitByUser(limitContent)).Post("/{id}", s.createComment)
 		})
 
 		r.Route("/comments", func(r chi.Router) {
@@ -162,7 +169,7 @@ func (s *Server) Mount(root chi.Router) {
 			r.Get("/", s.listConversations)
 			r.Get("/unread-count", s.unreadMessageCount)
 			r.Get("/{username}", s.getConversationWithUser)
-			r.Post("/{username}", s.sendMessage)
+			r.With(s.limitByUser(limitMessage)).Post("/{username}", s.sendMessage)
 		})
 
 		r.Route("/notifications", func(r chi.Router) {
@@ -177,27 +184,6 @@ func (s *Server) Mount(root chi.Router) {
 		r.With(s.requireAuth).Post("/upload", s.upload)
 		r.Get("/categories", s.listCategories)
 		r.Get("/health", s.health)
-	})
-}
-
-// rateLimit applies Redis-backed rate limiting when available, falling back
-// to an in-memory token bucket per IP otherwise.
-func (s *Server) rateLimit(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		switch {
-		case s.cache != nil:
-			if allowed, err := s.cache.AllowRequest(r.Context(), ip); err == nil && !allowed {
-				jsonError(w, "too many requests", http.StatusTooManyRequests)
-				return
-			}
-		case s.rateLimiter != nil:
-			if !s.rateLimiter.Allow(ip) {
-				jsonError(w, "too many requests", http.StatusTooManyRequests)
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 

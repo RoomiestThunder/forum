@@ -23,6 +23,9 @@ type ServerConfig struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	IdleTimeout  time.Duration
+	// TrustProxy makes the app take the client address from X-Forwarded-For /
+	// X-Real-IP. Only safe behind a reverse proxy that sets them.
+	TrustProxy bool
 }
 
 type DatabaseConfig struct {
@@ -79,6 +82,7 @@ func LoadConfig() *Config {
 			ReadTimeout:  time.Duration(getEnvInt("READ_TIMEOUT_SECS", 15)) * time.Second,
 			WriteTimeout: time.Duration(getEnvInt("WRITE_TIMEOUT_SECS", 15)) * time.Second,
 			IdleTimeout:  time.Duration(getEnvInt("IDLE_TIMEOUT_SECS", 60)) * time.Second,
+			TrustProxy:   getEnvBool("TRUST_PROXY", false),
 		},
 		Database: DatabaseConfig{
 			Path:        getEnv("DB_PATH", "forum.db"),

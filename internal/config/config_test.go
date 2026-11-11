@@ -111,6 +111,30 @@ func TestConfigDatabaseSettings(t *testing.T) {
 	}
 }
 
+func TestTrustProxy(t *testing.T) {
+	t.Run("off by default", func(t *testing.T) {
+		if LoadConfig().Server.TrustProxy {
+			t.Fatal("TRUST_PROXY must default to false: trusting forwarding headers without a proxy is spoofable")
+		}
+	})
+
+	for value, want := range map[string]bool{"true": true, "1": true, "false": false} {
+		t.Run("TRUST_PROXY="+value, func(t *testing.T) {
+			t.Setenv("TRUST_PROXY", value)
+			if got := LoadConfig().Server.TrustProxy; got != want {
+				t.Fatalf("TRUST_PROXY=%q: got %v, want %v", value, got, want)
+			}
+		})
+	}
+
+	t.Run("garbage falls back to the safe default", func(t *testing.T) {
+		t.Setenv("TRUST_PROXY", "maybe")
+		if LoadConfig().Server.TrustProxy {
+			t.Fatal("an unparsable value must not enable proxy trust")
+		}
+	})
+}
+
 func TestConfigServerTimeouts(t *testing.T) {
 	os.Clearenv()
 	cfg := LoadConfig()
