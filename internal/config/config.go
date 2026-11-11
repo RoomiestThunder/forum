@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -8,14 +10,17 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	JWT      JWTConfig
-	Redis    RedisConfig
-	MinIO    MinIOConfig
-	SMTP     SMTPConfig
-	GitHub   GitHubConfig
-	BaseURL  string
+	// Environment is APP_ENV. "production" turns configuration warnings into
+	// startup errors.
+	Environment string
+	Server      ServerConfig
+	Database    DatabaseConfig
+	JWT         JWTConfig
+	Redis       RedisConfig
+	MinIO       MinIOConfig
+	SMTP        SMTPConfig
+	GitHub      GitHubConfig
+	BaseURL     string
 }
 
 type ServerConfig struct {
@@ -39,10 +44,24 @@ type DatabaseConfig struct {
 }
 
 type JWTConfig struct {
-	Secret               string
+	Secret string
+	// SecretGenerated is true when JWT_SECRET wasn't set and Secret is a random
+	// value made at startup. That is safe, but every restart invalidates all
+	// issued tokens, and several instances would disagree about each other's.
+	SecretGenerated      bool
 	AccessTokenDuration  time.Duration
 	RefreshTokenDuration time.Duration
 }
+
+const (
+	// jwtSecretPlaceholder is the value shipped in .env.example and
+	// docker-compose.yml. It is public, so a server signing with it lets anyone
+	// forge a token for any user, admins included.
+	jwtSecretPlaceholder = "change-me-in-production"
+	// minJWTSecretLength is the shortest secret considered strong enough for
+	// HS256, whose key should be at least as long as its 256-bit output.
+	minJWTSecretLength = 32
+)
 
 type RedisConfig struct {
 	URL      string
@@ -76,7 +95,14 @@ type GitHubConfig struct {
 }
 
 func LoadConfig() *Config {
+	secret := getEnv("JWT_SECRET", "")
+	secretGenerated := secret == ""
+	if secretGenerated {
+		secret = randomSecret()
+	}
+
 	return &Config{
+		Environment: getEnv("APP_ENV", ""),
 		Server: ServerConfig{
 			Port:         getEnvInt("PORT", 8080),
 			ReadTimeout:  time.Duration(getEnvInt("READ_TIMEOUT_SECS", 15)) * time.Second,
@@ -92,7 +118,8 @@ func LoadConfig() *Config {
 			ConnMaxLife: time.Duration(getEnvInt("DB_CONN_MAX_LIFE_MINS", 5)) * time.Minute,
 		},
 		JWT: JWTConfig{
-			Secret:               getEnv("JWT_SECRET", "change-me-in-production"),
+			Secret:               secret,
+			SecretGenerated:      secretGenerated,
 			AccessTokenDuration:  time.Duration(getEnvInt("JWT_ACCESS_DURATION_MIN", 15)) * time.Minute,
 			RefreshTokenDuration: time.Duration(getEnvInt("JWT_REFRESH_DURATION_DAYS", 7)) * 24 * time.Hour,
 		},
@@ -136,7 +163,47 @@ func (c *Config) Validate() error {
 	if c.Database.MaxIdleConn < 0 {
 		return fmt.Errorf("database max idle connections cannot be negative")
 	}
+	if c.IsProduction() {
+		if problem := c.jwtSecretProblem(); problem != "" {
+			return fmt.Errorf("refusing to start in production: %s", problem)
+		}
+	}
 	return nil
+}
+
+// IsProduction reports whether APP_ENV=production.
+func (c *Config) IsProduction() bool { return c.Environment == "production" }
+
+// Warnings lists configuration that works but is probably not what was meant.
+// In production the same problems are errors from Validate.
+func (c *Config) Warnings() []string {
+	var warnings []string
+	if problem := c.jwtSecretProblem(); problem != "" {
+		warnings = append(warnings, problem)
+	}
+	return warnings
+}
+
+func (c *Config) jwtSecretProblem() string {
+	switch {
+	case c.JWT.SecretGenerated:
+		return "JWT_SECRET is not set, so a random one was generated: all sessions end whenever the server restarts"
+	case c.JWT.Secret == jwtSecretPlaceholder:
+		return "JWT_SECRET is the public placeholder value; anyone can forge a login token with it. Set it to a random value of at least 32 characters"
+	case len(c.JWT.Secret) < minJWTSecretLength:
+		return fmt.Sprintf("JWT_SECRET is shorter than %d characters", minJWTSecretLength)
+	}
+	return ""
+}
+
+// randomSecret returns 32 random bytes, hex encoded.
+func randomSecret() string {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		// No entropy source means no safe way to generate a secret at all.
+		panic(fmt.Sprintf("config: cannot generate a JWT secret: %v", err))
+	}
+	return hex.EncodeToString(buf)
 }
 
 func (c *Config) GetServerAddr() string {

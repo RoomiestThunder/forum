@@ -33,6 +33,9 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	for _, warning := range cfg.Warnings() {
+		logger.Warn("configuration", slog.String("warning", warning))
+	}
 	metrics.Init()
 
 	// ---- Database ----

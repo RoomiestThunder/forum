@@ -62,13 +62,18 @@ func (m *Manager) GenerateRefreshToken() (string, error) {
 }
 
 // ValidateAccessToken parses and validates a JWT access token. Returns claims.
+//
+// Only HS256, the algorithm tokens are signed with, is accepted: letting the
+// token's own header pick the algorithm is how "alg: none" and key-confusion
+// attacks work. A token without an expiry is refused too, since one that
+// never expires could never be revoked.
 func (m *Manager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
 		return m.secret, nil
-	})
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithExpirationRequired(),
+	)
 	if err != nil {
 		return nil, err
 	}
