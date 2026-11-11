@@ -1,15 +1,14 @@
-import { useState } from 'react'
+import { useMemo } from 'react'
 import { Bookmark, Loader2, Pencil, Pin, Send, Trash2 } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link, useNavigate, useParams } from 'react-router'
-import CommentItem from '../components/CommentItem'
-import MentionTextarea from '../components/MentionTextarea'
+import CommentForm from '../components/CommentForm'
+import CommentThread from '../components/CommentThread'
 import ReportButton from '../components/ReportButton'
 import VoteButtons from '../components/VoteButtons'
 import {
   useAdminDeletePost,
-  useCreateComment,
   useDeletePost,
   useMe,
   usePost,
@@ -18,6 +17,7 @@ import {
   useToggleBookmark,
   useVotePost,
 } from '../lib/queries'
+import { buildCommentTree, countLive } from '../lib/commentTree'
 import { fullDate, timeAgo } from '../lib/time'
 import { useAuth } from '../stores/auth'
 
@@ -36,11 +36,11 @@ export default function PostDetail() {
   const deletePost = useDeletePost()
   const adminDeletePost = useAdminDeletePost()
   const setPinned = useSetPostPinned()
-  const createComment = useCreateComment(postId)
   const toggleBookmark = useToggleBookmark(postId)
   const publishPost = usePublishPost()
 
-  const [commentDraft, setCommentDraft] = useState('')
+  const commentList = data?.comments
+  const commentTree = useMemo(() => buildCommentTree(commentList ?? []), [commentList])
 
   if (isLoading) {
     return (
@@ -61,12 +61,6 @@ export default function PostDetail() {
   const { post } = data
   const comments = data.comments ?? []
   const isOwn = userId === post.user_id
-
-  const submitComment = () => {
-    const content = commentDraft.trim()
-    if (!content) return
-    createComment.mutate(content, { onSuccess: () => setCommentDraft('') })
-  }
 
   return (
     <div className="space-y-6">
@@ -212,12 +206,12 @@ export default function PostDetail() {
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">
-          Comments <span className="text-zinc-400">({comments.length})</span>
+          Comments <span className="text-zinc-400">({countLive(comments)})</span>
         </h2>
 
         <div className="space-y-2">
-          {comments.map((comment) => (
-            <CommentItem key={comment.id} comment={comment} />
+          {commentTree.map((node) => (
+            <CommentThread key={node.comment.id} node={node} postId={postId} />
           ))}
           {comments.length === 0 && (
             <p className="py-4 text-sm text-zinc-500 dark:text-zinc-400">No comments yet.</p>
@@ -225,37 +219,9 @@ export default function PostDetail() {
         </div>
 
         {loggedIn ? (
-          <form
-            className="mt-4"
-            onSubmit={(e) => {
-              e.preventDefault()
-              submitComment()
-            }}
-          >
-            {createComment.isError && (
-              <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
-                {createComment.error.message}
-              </p>
-            )}
-            <MentionTextarea
-              value={commentDraft}
-              onChange={setCommentDraft}
-              placeholder="Write a comment…"
-              maxLength={500}
-              rows={3}
-              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"
-            />
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-xs text-zinc-400">{commentDraft.length}/500</span>
-              <button
-                type="submit"
-                disabled={createComment.isPending || !commentDraft.trim()}
-                className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:opacity-50"
-              >
-                {createComment.isPending ? 'Posting…' : 'Comment'}
-              </button>
-            </div>
-          </form>
+          <div className="mt-4">
+            <CommentForm postId={postId} />
+          </div>
         ) : (
           <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
             <Link

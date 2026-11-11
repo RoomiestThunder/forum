@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Pencil, Trash2 } from 'lucide-react'
+import { CornerDownRight, Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router'
 import {
   useAdminDeleteComment,
@@ -16,7 +16,13 @@ import MentionTextarea from './MentionTextarea'
 import ReportButton from './ReportButton'
 import VoteButtons from './VoteButtons'
 
-export default function CommentItem({ comment }: { comment: Comment }) {
+interface Props {
+  comment: Comment
+  /** Shown as a Reply button when given; the parent decides whether replying is allowed. */
+  onReply?: () => void
+}
+
+export default function CommentItem({ comment, onReply }: Props) {
   const userId = useAuth((s) => s.userId)
   const loggedIn = useAuth((s) => s.refreshToken !== null)
   const isOwn = userId === comment.user_id
@@ -37,6 +43,16 @@ export default function CommentItem({ comment }: { comment: Comment }) {
     update.mutate(
       { commentId: comment.id, content },
       { onSuccess: () => setEditing(false) },
+    )
+  }
+
+  // A deleted comment that still has replies under it: a placeholder, with no
+  // author, text or actions.
+  if (comment.deleted) {
+    return (
+      <div className="rounded-lg border border-dashed border-zinc-200 px-3 py-2 text-sm italic text-zinc-400 dark:border-zinc-800 dark:text-zinc-500">
+        [deleted]
+      </div>
     )
   }
 
@@ -118,13 +134,23 @@ export default function CommentItem({ comment }: { comment: Comment }) {
       )}
 
       {!editing && (
-        <div className="mt-2">
+        <div className="mt-2 flex items-center gap-3">
           <VoteButtons
             likes={comment.likes}
             dislikes={comment.dislikes}
             onVote={(isLike) => vote.mutate({ commentId: comment.id, isLike })}
             disabled={vote.isPending}
           />
+          {onReply && (
+            <button
+              type="button"
+              onClick={onReply}
+              className="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            >
+              <CornerDownRight size={13} />
+              Reply
+            </button>
+          )}
         </div>
       )}
     </div>

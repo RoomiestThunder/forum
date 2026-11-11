@@ -9,6 +9,7 @@ interface Props {
   maxLength?: number
   rows?: number
   className?: string
+  autoFocus?: boolean
 }
 
 /**
@@ -25,6 +26,7 @@ export default function MentionTextarea({
   maxLength,
   rows = 3,
   className,
+  autoFocus,
 }: Props) {
   const [focused, setFocused] = useState(false)
 
@@ -53,6 +55,7 @@ export default function MentionTextarea({
         placeholder={placeholder}
         maxLength={maxLength}
         rows={rows}
+        autoFocus={autoFocus}
         className={className}
       />
       {visible && (

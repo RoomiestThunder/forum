@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AtSign, Bell, MessageSquare, ThumbsUp } from 'lucide-react'
+import { AtSign, Bell, CornerDownRight, MessageSquare, ThumbsUp } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import {
   useMarkAllNotificationsRead,
@@ -14,6 +14,8 @@ function describe(n: Notification): string {
   switch (n.type) {
     case 'new_comment':
       return `${n.payload.actor} commented on "${n.payload.post_title}"`
+    case 'new_reply':
+      return `${n.payload.actor} replied to your comment on "${n.payload.post_title}"`
     case 'new_like':
       return `${n.payload.actor} liked "${n.payload.post_title}"`
     case 'new_mention':
@@ -102,6 +104,8 @@ export default function NotificationBell() {
               >
                 {n.type === 'new_comment' ? (
                   <MessageSquare size={15} className="mt-0.5 shrink-0 text-indigo-500" />
+                ) : n.type === 'new_reply' ? (
+                  <CornerDownRight size={15} className="mt-0.5 shrink-0 text-sky-500" />
                 ) : n.type === 'new_mention' ? (
                   <AtSign size={15} className="mt-0.5 shrink-0 text-violet-500" />
                 ) : (

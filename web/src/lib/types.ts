@@ -34,12 +34,19 @@ export interface Post {
 export interface Comment {
   id: number
   post_id: number
+  /** 0 for a deleted comment: the author isn't revealed. */
   user_id: number
+  /** The comment this one replies to, or null for a top-level comment. */
+  parent_id: number | null
+  /** Nesting level: 0 for top-level, one more than the parent for a reply. */
+  depth: number
   content: string
   created_at: string
   author: string
   likes: number
   dislikes: number
+  /** A tombstone: deleted, but kept because other comments reply to it. */
+  deleted: boolean
 }
 
 export interface AuthResponse {
@@ -76,6 +83,14 @@ export interface NewCommentPayload {
   actor: string
 }
 
+export interface NewReplyPayload {
+  post_id: number
+  post_title: string
+  comment_id: number
+  parent_id: number
+  actor: string
+}
+
 export interface NewLikePayload {
   post_id: number
   post_title: string
@@ -89,11 +104,15 @@ export interface NewMentionPayload {
   actor: string
 }
 
-export type NotificationPayload = NewCommentPayload | NewLikePayload | NewMentionPayload
+export type NotificationPayload =
+  | NewCommentPayload
+  | NewReplyPayload
+  | NewLikePayload
+  | NewMentionPayload
 
 export interface Notification {
   id: number
-  type: 'new_comment' | 'new_like' | 'new_mention'
+  type: 'new_comment' | 'new_reply' | 'new_like' | 'new_mention'
   payload: NotificationPayload
   read: boolean
   created_at: string

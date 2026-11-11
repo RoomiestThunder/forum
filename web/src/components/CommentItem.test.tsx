@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Comment } from '../lib/types'
@@ -10,11 +10,14 @@ const baseComment: Comment = {
   id: 1,
   post_id: 10,
   user_id: 1,
+  parent_id: null,
+  depth: 0,
   content: 'hey @alice, nice work on this',
   created_at: new Date().toISOString(),
   author: 'bob',
   likes: 2,
   dislikes: 0,
+  deleted: false,
 }
 
 describe('CommentItem', () => {
@@ -69,5 +72,26 @@ describe('CommentItem', () => {
 
       expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled()
     })
+  })
+  it('shows a placeholder, and nothing else, for a deleted comment', () => {
+    useAuth.getState().setSession({ userId: 1, username: 'bob', accessToken: 't', refreshToken: 'r' })
+    renderWithProviders(
+      <CommentItem comment={{ ...baseComment, deleted: true, content: '', author: '', user_id: 0 }} />,
+    )
+    expect(screen.getByText('[deleted]')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Edit comment')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Delete comment')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Like')).not.toBeInTheDocument()
+  })
+
+  it('offers a Reply button only when the parent passes a handler', async () => {
+    const onReply = vi.fn()
+    const { unmount } = renderWithProviders(<CommentItem comment={baseComment} />)
+    expect(screen.queryByRole('button', { name: 'Reply' })).not.toBeInTheDocument()
+    unmount()
+
+    renderWithProviders(<CommentItem comment={baseComment} onReply={onReply} />)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Reply' }))
+    expect(onReply).toHaveBeenCalledTimes(1)
   })
 })

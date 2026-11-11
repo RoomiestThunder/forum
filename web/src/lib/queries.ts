@@ -172,10 +172,10 @@ export function useVoteComment(postId: number) {
 export function useCreateComment(postId: number) {
   const invalidate = useInvalidatePosts()
   return useMutation({
-    mutationFn: (content: string) =>
+    mutationFn: ({ content, parentId }: { content: string; parentId?: number }) =>
       api<{ id: number }>(`/posts/${postId}`, {
         method: 'POST',
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, parent_id: parentId }),
       }),
     onSuccess: () => invalidate(postId),
   })
