@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useResetPassword } from '../lib/queries'
+import { PASSWORD_MAX_BYTES, PASSWORD_MIN_LENGTH } from '../lib/validation'
 
 export default function ResetPassword() {
   const [searchParams] = useSearchParams()
@@ -63,8 +64,8 @@ export default function ResetPassword() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            minLength={6}
-            maxLength={32}
+            minLength={PASSWORD_MIN_LENGTH}
+            maxLength={PASSWORD_MAX_BYTES}
             autoFocus
             autoComplete="new-password"
             className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"

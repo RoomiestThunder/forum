@@ -3,6 +3,13 @@ import { Link, useNavigate } from 'react-router'
 import { useMutation } from '@tanstack/react-query'
 import GitHubButton from '../components/GitHubButton'
 import { register } from '../lib/api'
+import {
+  PASSWORD_MAX_BYTES,
+  PASSWORD_MIN_LENGTH,
+  USERNAME_HINT,
+  USERNAME_PATTERN,
+  passwordProblem,
+} from '../lib/validation'
 
 export default function Register() {
   const navigate = useNavigate()
@@ -17,12 +24,13 @@ export default function Register() {
   })
 
   const submit = () => {
-    if (username.length < 3 || username.length > 20) {
-      setValidationError('Username must be 3–20 characters.')
+    if (!USERNAME_PATTERN.test(username)) {
+      setValidationError(USERNAME_HINT)
       return
     }
-    if (password.length < 6 || password.length > 32) {
-      setValidationError('Password must be 6–32 characters.')
+    const problem = passwordProblem(password)
+    if (problem) {
+      setValidationError(problem)
       return
     }
     setValidationError(null)
@@ -67,6 +75,8 @@ export default function Register() {
             required
             minLength={3}
             maxLength={20}
+            pattern="[A-Za-z0-9_]{3,20}"
+            title={USERNAME_HINT}
             autoComplete="username"
             className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"
           />
@@ -78,8 +88,8 @@ export default function Register() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            minLength={6}
-            maxLength={32}
+            minLength={PASSWORD_MIN_LENGTH}
+            maxLength={PASSWORD_MAX_BYTES}
             autoComplete="new-password"
             className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"
           />
