@@ -10,6 +10,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// bcryptCost is the work factor for password hashes. It is a variable only so
+// the test suite can lower it: at the default cost every registration costs
+// ~100ms (several times that under the race detector), which dominates the
+// run time of tests that create users.
+var bcryptCost = bcrypt.DefaultCost
+
 type registerRequest struct {
 	Email    string `json:"email"`
 	Username string `json:"username"`
@@ -43,7 +49,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return

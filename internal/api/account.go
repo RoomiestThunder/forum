@@ -120,7 +120,7 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid or expired token", http.StatusBadRequest)
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcryptCost)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
