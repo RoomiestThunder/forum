@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Loader2, Send } from 'lucide-react'
 import { Link, useParams } from 'react-router'
-import { useSendMessage, useThread } from '../lib/queries'
+import { useIsBlocked, useSendMessage, useThread } from '../lib/queries'
 import { timeAgo } from '../lib/time'
 import { useAuth } from '../stores/auth'
 
@@ -10,6 +10,7 @@ export default function MessageThread() {
   const myUsername = useAuth((s) => s.username)
   const { data, isLoading } = useThread(username)
   const send = useSendMessage(username)
+  const isBlocked = useIsBlocked(username)
   const [content, setContent] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -73,6 +74,21 @@ export default function MessageThread() {
         <div ref={bottomRef} />
       </div>
 
+      {isBlocked && (
+        <p className="mt-3 text-center text-sm text-zinc-500 dark:text-zinc-400">
+          You blocked {username}. Unblock them from their{' '}
+          <Link to={`/u/${username}`} className="underline">
+            profile
+          </Link>{' '}
+          to send messages.
+        </p>
+      )}
+      {send.isError && (
+        <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">
+          {send.error.message}
+        </p>
+      )}
+
       <form
         className="mt-3 flex gap-2"
         onSubmit={(e) => {
@@ -92,11 +108,12 @@ export default function MessageThread() {
           placeholder="Write a message…"
           rows={1}
           maxLength={2000}
-          className="flex-1 resize-none rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"
+          disabled={isBlocked}
+          className="flex-1 resize-none disabled:opacity-50 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-zinc-700 dark:bg-zinc-900"
         />
         <button
           type="submit"
-          disabled={send.isPending || content.trim() === ''}
+          disabled={isBlocked || send.isPending || content.trim() === ''}
           aria-label="Send"
           className="flex shrink-0 items-center justify-center rounded-lg bg-indigo-600 px-3.5 text-white transition hover:bg-indigo-500 disabled:opacity-50"
         >

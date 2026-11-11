@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, MailWarning } from 'lucide-react'
 import { useNavigate } from 'react-router'
+import BlockedUsers from '../components/BlockedUsers'
 import { useMe, useResendVerification, useUpdateBio, useUploadAvatar } from '../lib/queries'
 import { useAuth } from '../stores/auth'
 
@@ -128,6 +129,8 @@ export default function Settings() {
           </button>
         </div>
       </form>
+
+      <BlockedUsers />
     </div>
   )
 }

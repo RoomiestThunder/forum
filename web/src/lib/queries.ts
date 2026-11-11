@@ -416,6 +416,31 @@ export function useSendMessage(username: string) {
   })
 }
 
+export function useBlockedUsers() {
+  const loggedIn = useAuth((s) => s.refreshToken !== null)
+  return useQuery({
+    queryKey: ['blocks'],
+    queryFn: () => api<UserSummary[]>('/blocks'),
+    enabled: loggedIn,
+  })
+}
+
+/** Whether `username` is on the signed-in user's block list (names are case-insensitive). */
+export function useIsBlocked(username: string): boolean {
+  const { data: blocked } = useBlockedUsers()
+  const wanted = username.toLowerCase()
+  return blocked?.some((u) => u.username.toLowerCase() === wanted) ?? false
+}
+
+export function useSetBlocked() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ username, blocked }: { username: string; blocked: boolean }) =>
+      api(`/blocks/${encodeURIComponent(username)}`, { method: blocked ? 'PUT' : 'DELETE' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['blocks'] }),
+  })
+}
+
 export function useAuthProviders() {
   return useQuery({
     queryKey: ['auth-providers'],
