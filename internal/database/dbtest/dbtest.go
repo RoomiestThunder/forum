@@ -7,6 +7,7 @@
 package dbtest
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -92,6 +93,34 @@ func newSQLite(t testing.TB) database.Store {
 
 func newPostgres(t testing.TB) (database.Store, error) {
 	t.Helper()
+	db, err := rawPostgres(t)
+	if err != nil {
+		return nil, err
+	}
+	if err := database.RunPostgresSchema(db); err != nil {
+		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	store := database.NewPostgresStore(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = store.Close() })
+	return store, nil
+}
+
+// RawPostgres returns a connection to a brand-new, empty schema - no tables at
+// all - for tests that apply the schema themselves (migration tests). It is
+// skipped when no PostgreSQL is configured or reachable.
+func RawPostgres(t testing.TB) *sql.DB {
+	t.Helper()
+	db, err := rawPostgres(t)
+	if err != nil {
+		t.Skip(err)
+	}
+	return db
+}
+
+// rawPostgres creates an empty schema and a pool whose every connection has
+// it as its search_path.
+func rawPostgres(t testing.TB) (*sql.DB, error) {
+	t.Helper()
 	dsn := os.Getenv(DatabaseURLEnv)
 	if dsn == "" {
 		return nil, fmt.Errorf("%s not set", DatabaseURLEnv)
@@ -115,13 +144,8 @@ func newPostgres(t testing.TB) (database.Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to schema: %w", err)
 	}
-	if err := database.RunPostgresSchema(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("apply schema: %w", err)
-	}
-	store := database.NewPostgresStore(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	t.Cleanup(func() { _ = store.Close() })
-	return store, nil
+	t.Cleanup(func() { _ = db.Close() })
+	return db, nil
 }
 
 // WithSearchPath returns dsn with the connection's search_path set to schema.
