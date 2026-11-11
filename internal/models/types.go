@@ -63,14 +63,21 @@ type Post struct {
 }
 
 type Comment struct {
-	ID        int       `json:"id"`
-	PostID    int       `json:"post_id"`
-	UserID    int       `json:"user_id"`
+	ID     int `json:"id"`
+	PostID int `json:"post_id"`
+	UserID int `json:"user_id"`
+	// ParentID is the comment this one replies to; nil for a top-level comment.
+	ParentID *int `json:"parent_id"`
+	// Depth is the nesting level: 0 for top-level, parent's depth + 1 for a reply.
+	Depth     int       `json:"depth"`
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 	Author    string    `json:"author"`
 	Likes     int       `json:"likes"`
 	Dislikes  int       `json:"dislikes"`
+	// Deleted marks a tombstone: a deleted comment that is kept because it has
+	// replies. Its content and author are cleared before it is served.
+	Deleted bool `json:"deleted"`
 }
 
 type RefreshToken struct {

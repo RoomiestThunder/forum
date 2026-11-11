@@ -90,8 +90,12 @@ func sqliteSchema(db *sql.DB) error {
 		user_id INTEGER,
 		content TEXT,
 		created_at DATETIME,
+		parent_id INTEGER,
+		depth INTEGER NOT NULL DEFAULT 0,
+		deleted BOOLEAN NOT NULL DEFAULT 0,
 		FOREIGN KEY(post_id) REFERENCES posts(id),
-		FOREIGN KEY(user_id) REFERENCES users(id)
+		FOREIGN KEY(user_id) REFERENCES users(id),
+		FOREIGN KEY(parent_id) REFERENCES comments(id)
 	);
 	CREATE TABLE IF NOT EXISTS post_likes (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +230,17 @@ func sqliteSchema(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := sqliteAddMissingColumns(db); err != nil {
+		return err
+	}
+	// Created after the columns exist, so they also work on a database that
+	// predates them.
+	if _, err := db.Exec(`
+	CREATE INDEX IF NOT EXISTS comments_post_idx ON comments(post_id, created_at, id);
+	CREATE INDEX IF NOT EXISTS comments_parent_idx ON comments(parent_id);
+	`); err != nil {
+		return err
+	}
 
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM categories").Scan(&count); err != nil {
@@ -234,6 +249,49 @@ func sqliteSchema(db *sql.DB) error {
 	if count == 0 {
 		_, err = db.Exec("INSERT INTO categories (name) VALUES (?), (?), (?)", "General", "Programming", "Offtopic")
 		return err
+	}
+	return nil
+}
+
+// sqliteLateColumns are columns that were added to a table after its first
+// version (the PostgreSQL counterparts are migrations 002-011). CREATE TABLE IF
+// NOT EXISTS leaves an existing table as it is, so a database file created by an
+// older build would otherwise fail with "no such column" after an upgrade.
+//
+// SQLite only allows ADD COLUMN with a constant default, which is why
+// users.created_at gets a fixed epoch rather than CURRENT_TIMESTAMP.
+var sqliteLateColumns = []struct{ table, column, definition string }{
+	{"users", "bio", "TEXT NOT NULL DEFAULT ''"},
+	{"users", "created_at", "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'"},
+	{"users", "is_admin", "BOOLEAN NOT NULL DEFAULT 0"},
+	{"users", "is_moderator", "BOOLEAN NOT NULL DEFAULT 0"},
+	{"users", "banned", "BOOLEAN NOT NULL DEFAULT 0"},
+	{"users", "email_verified", "BOOLEAN NOT NULL DEFAULT 0"},
+	{"posts", "pinned", "BOOLEAN NOT NULL DEFAULT 0"},
+	{"posts", "draft", "BOOLEAN NOT NULL DEFAULT 0"},
+	{"comments", "parent_id", "INTEGER REFERENCES comments(id)"},
+	{"comments", "depth", "INTEGER NOT NULL DEFAULT 0"},
+	{"comments", "deleted", "BOOLEAN NOT NULL DEFAULT 0"},
+}
+
+// sqliteAddMissingColumns brings a database created by an older build up to
+// the current column set. It is idempotent: on a fresh database, where CREATE
+// TABLE already defined every column, it does nothing.
+func sqliteAddMissingColumns(db *sql.DB) error {
+	for _, c := range sqliteLateColumns {
+		var present int
+		if err := db.QueryRow(
+			"SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?", c.table, c.column,
+		).Scan(&present); err != nil {
+			return fmt.Errorf("inspect %s.%s: %w", c.table, c.column, err)
+		}
+		if present > 0 {
+			continue
+		}
+		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", c.table, c.column, c.definition)
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
+		}
 	}
 	return nil
 }
@@ -930,8 +988,28 @@ func (s *SQLiteStore) CountBookmarkedPostsByUser(userID int) (int, error) {
 
 // ---- Comment operations ----
 
-func (s *SQLiteStore) CreateComment(postID, userID int, content string) (int, error) {
-	res, err := s.db.Exec("INSERT INTO comments (post_id, user_id, content, created_at) VALUES (?, ?, ?, ?)", postID, userID, content, time.Now())
+func (s *SQLiteStore) CreateComment(postID, userID int, parentID *int, content string) (int, error) {
+	depth := 0
+	var parent interface{} // nil binds as NULL: a top-level comment
+	if parentID != nil {
+		var parentPost, parentDepth int
+		err := s.db.QueryRow("SELECT post_id, depth FROM comments WHERE id = ?", *parentID).Scan(&parentPost, &parentDepth)
+		if err == sql.ErrNoRows {
+			return 0, apperrors.NotFoundError("Parent comment")
+		}
+		if err != nil {
+			return 0, apperrors.DatabaseError(err)
+		}
+		if parentPost != postID {
+			return 0, apperrors.ValidationError("parent comment belongs to a different post")
+		}
+		depth = parentDepth + 1
+		parent = *parentID
+	}
+	res, err := s.db.Exec(
+		"INSERT INTO comments (post_id, user_id, parent_id, depth, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		postID, userID, parent, depth, content, time.Now(),
+	)
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)
 	}
@@ -939,30 +1017,66 @@ func (s *SQLiteStore) CreateComment(postID, userID int, content string) (int, er
 	return int(id), nil
 }
 
+const commentSelect = `
+	SELECT c.id, c.post_id, c.user_id, c.parent_id, c.depth, c.content, c.created_at, u.username, c.deleted,
+		(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = 1),
+		(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = 0)
+	FROM comments c JOIN users u ON c.user_id = u.id`
+
+type rowScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanComment(row rowScanner) (*models.Comment, error) {
+	var c models.Comment
+	var parent sql.NullInt64
+	if err := row.Scan(&c.ID, &c.PostID, &c.UserID, &parent, &c.Depth, &c.Content, &c.CreatedAt,
+		&c.Author, &c.Deleted, &c.Likes, &c.Dislikes); err != nil {
+		return nil, err
+	}
+	if parent.Valid {
+		id := int(parent.Int64)
+		c.ParentID = &id
+	}
+	return &c, nil
+}
+
+func (s *SQLiteStore) GetComment(id int) (*models.Comment, error) {
+	c, err := scanComment(s.db.QueryRow(commentSelect+" WHERE c.id = ?", id))
+	if err == sql.ErrNoRows {
+		return nil, apperrors.NotFoundError("Comment")
+	}
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return c, nil
+}
+
+// GetCommentsByPostID returns every comment of a post as a flat list, oldest
+// first; the reply structure is carried by ParentID and rebuilt by the client.
 func (s *SQLiteStore) GetCommentsByPostID(postID int) ([]*models.Comment, error) {
-	rows, err := s.db.Query(`
-		SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username,
-			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = 1),
-			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = 0)
-		FROM comments c JOIN users u ON c.user_id = u.id
-		WHERE c.post_id = ? ORDER BY c.created_at ASC`, postID)
+	rows, err := s.db.Query(commentSelect+" WHERE c.post_id = ? ORDER BY c.created_at ASC, c.id ASC", postID)
 	if err != nil {
 		return nil, apperrors.DatabaseError(err)
 	}
 	defer rows.Close()
 	var comments []*models.Comment
 	for rows.Next() {
-		var c models.Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author, &c.Likes, &c.Dislikes); err != nil {
+		c, err := scanComment(rows)
+		if err != nil {
 			return nil, apperrors.DatabaseError(err)
 		}
-		comments = append(comments, &c)
+		comments = append(comments, c)
 	}
-	return comments, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return comments, nil
 }
 
+// UpdateComment edits a comment's text. A tombstone can't be edited back to life.
 func (s *SQLiteStore) UpdateComment(id, userID int, content string) error {
-	res, err := s.db.Exec("UPDATE comments SET content = ? WHERE id = ? AND user_id = ?", content, id, userID)
+	res, err := s.db.Exec("UPDATE comments SET content = ? WHERE id = ? AND user_id = ? AND deleted = 0", content, id, userID)
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
@@ -974,23 +1088,89 @@ func (s *SQLiteStore) UpdateComment(id, userID int, content string) error {
 }
 
 func (s *SQLiteStore) DeleteComment(id, userID int) error {
-	return s.deleteComment(id, "id = ? AND user_id = ?", id, userID)
+	return s.deleteComment(id, &userID)
 }
 
 // AdminDeleteComment removes a comment regardless of ownership.
 func (s *SQLiteStore) AdminDeleteComment(id int) error {
-	return s.deleteComment(id, "id = ?", id)
+	return s.deleteComment(id, nil)
 }
 
-func (s *SQLiteStore) deleteComment(id int, whereClause string, whereArgs ...interface{}) error {
-	_, _ = s.db.Exec("DELETE FROM comment_likes WHERE comment_id = ?", id)
-	res, err := s.db.Exec("DELETE FROM comments WHERE "+whereClause, whereArgs...)
+// deleteComment removes a comment, or - if other comments reply to it -
+// replaces it with a tombstone so the replies keep their place in the thread.
+// When the last reply under a tombstone goes, the tombstone goes with it. It
+// all happens in one transaction, and ownership is checked before anything is
+// touched: a rejected delete must not have side effects.
+//
+// ownerID nil means the caller may delete any comment (staff).
+func (s *SQLiteStore) deleteComment(id int, ownerID *int) error {
+	tx, err := s.db.Begin()
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	defer func() { _ = tx.Rollback() }()
+
+	var parent sql.NullInt64
+	var owner int
+	var deleted bool
+	err = tx.QueryRow("SELECT parent_id, user_id, deleted FROM comments WHERE id = ?", id).Scan(&parent, &owner, &deleted)
+	if err == sql.ErrNoRows {
+		return apperrors.NotFoundError("Comment")
+	}
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	if ownerID != nil && owner != *ownerID {
 		return apperrors.PermissionError("delete comment")
+	}
+	if deleted {
+		return apperrors.NotFoundError("Comment")
+	}
+
+	if _, err := tx.Exec("DELETE FROM comment_likes WHERE comment_id = ?", id); err != nil {
+		return apperrors.DatabaseError(err)
+	}
+
+	var hasReplies bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM comments WHERE parent_id = ?)", id).Scan(&hasReplies); err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	if hasReplies {
+		if _, err := tx.Exec("UPDATE comments SET deleted = 1, content = '' WHERE id = ?", id); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		return commitComments(tx)
+	}
+
+	// A leaf: remove it, then any chain of now-childless tombstones above it.
+	current := id
+	for {
+		if _, err := tx.Exec("DELETE FROM comments WHERE id = ?", current); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if !parent.Valid {
+			break
+		}
+		parentID := int(parent.Int64)
+		var parentDeleted, stillHasReplies bool
+		var grandparent sql.NullInt64
+		if err := tx.QueryRow("SELECT deleted, parent_id FROM comments WHERE id = ?", parentID).Scan(&parentDeleted, &grandparent); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM comments WHERE parent_id = ?)", parentID).Scan(&stillHasReplies); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if !parentDeleted || stillHasReplies {
+			break
+		}
+		current, parent = parentID, grandparent
+	}
+	return commitComments(tx)
+}
+
+func commitComments(tx *sql.Tx) error {
+	if err := tx.Commit(); err != nil {
+		return apperrors.DatabaseError(err)
 	}
 	return nil
 }

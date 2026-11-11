@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -97,9 +98,13 @@ func (s *Server) getPost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "post not found", http.StatusNotFound)
 		return
 	}
-	comments, _ := s.store.GetCommentsByPostID(id)
+	comments, err := s.store.GetCommentsByPostID(id)
+	if err != nil {
+		s.storeError(w, r, err, "load comments")
+		return
+	}
 
-	resp := map[string]interface{}{"post": post, "comments": comments}
+	resp := map[string]interface{}{"post": post, "comments": redactDeleted(comments)}
 	if userID := userIDFromCtx(r); userID != 0 {
 		bookmarked, _ := s.store.IsBookmarked(id, userID)
 		resp["is_bookmarked"] = bookmarked
@@ -235,6 +240,14 @@ func (s *Server) deletePost(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+const (
+	maxCommentLength = 500
+	// maxCommentDepth is how many levels of replies may sit below a top-level
+	// comment. Past this a thread is too narrow to read, and the client has no
+	// room left to indent it.
+	maxCommentDepth = 5
+)
+
 func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 	postID, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
@@ -242,55 +255,96 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Content string `json:"content"`
+		Content  string `json:"content"`
+		ParentID *int   `json:"parent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if body.Content == "" || len(body.Content) > 500 {
-		jsonError(w, "content must be 1-500 chars", http.StatusBadRequest)
+	// Count characters, not bytes: a byte limit would cap Cyrillic or CJK text
+	// at a fraction of what the same limit allows in English.
+	body.Content = strings.TrimSpace(body.Content)
+	if body.Content == "" || utf8.RuneCountInString(body.Content) > maxCommentLength {
+		jsonError(w, fmt.Sprintf("content must be 1-%d characters", maxCommentLength), http.StatusBadRequest)
 		return
 	}
 	userID := userIDFromCtx(r)
-	commentID, err := s.store.CreateComment(postID, userID, body.Content)
-	if err != nil {
-		jsonError(w, "failed to create comment", http.StatusInternalServerError)
+
+	post, err := s.store.GetPost(postID)
+	if err != nil || (post.Draft && post.UserID != userID) {
+		// A draft answers exactly like a missing post, so it isn't revealed.
+		jsonError(w, "post not found", http.StatusNotFound)
 		return
 	}
 
-	// Notify the post author about the new comment (best effort).
-	post, postErr := s.store.GetPost(postID)
-	if postErr == nil && post.UserID != userID {
-		s.notify(post.UserID, userID, "new_comment", map[string]interface{}{
-			"post_id":    postID,
+	var parent *models.Comment
+	if body.ParentID != nil {
+		parent, err = s.store.GetComment(*body.ParentID)
+		if err != nil || parent.PostID != postID {
+			jsonError(w, "parent comment not found", http.StatusNotFound)
+			return
+		}
+		if parent.Deleted {
+			jsonError(w, "you can't reply to a deleted comment", http.StatusBadRequest)
+			return
+		}
+		if parent.Depth >= maxCommentDepth {
+			jsonError(w, "this thread is nested too deeply to reply to", http.StatusBadRequest)
+			return
+		}
+	}
+
+	commentID, err := s.store.CreateComment(postID, userID, body.ParentID, body.Content)
+	if err != nil {
+		s.storeError(w, r, err, "create comment")
+		return
+	}
+
+	s.notifyAboutComment(r, post, parent, commentID, body.Content)
+	jsonResponse(w, map[string]int{"id": commentID}, http.StatusCreated)
+}
+
+// notifyAboutComment tells the people a new comment concerns. Each person
+// gets at most one of the reply / post-comment notifications: the author of
+// the comment being replied to hears "new_reply", and the post's author hears
+// "new_comment" only if that isn't the same person. Nobody is notified about
+// their own comment.
+//
+// @mentions are a separate signal and are not deduplicated against those two,
+// even if the mentioned user is the post author.
+func (s *Server) notifyAboutComment(r *http.Request, post *models.Post, parent *models.Comment, commentID int, content string) {
+	actorID := userIDFromCtx(r)
+	payload := func() map[string]interface{} {
+		p := map[string]interface{}{
+			"post_id":    post.ID,
 			"post_title": post.Title,
 			"comment_id": commentID,
 			"actor":      usernameFromCtx(r),
-		})
+		}
+		if parent != nil {
+			p["parent_id"] = parent.ID
+		}
+		return p
 	}
 
-	// Notify @mentioned users too - a distinct signal from "someone
-	// commented on your post", so no dedup against the notification above
-	// even if the mentioned user happens to be the post author.
-	postTitle := ""
-	if postErr == nil {
-		postTitle = post.Title
+	notified := map[int]bool{actorID: true}
+	if parent != nil && !notified[parent.UserID] {
+		notified[parent.UserID] = true
+		s.notify(parent.UserID, actorID, "new_reply", payload())
 	}
-	for _, username := range extractMentions(body.Content) {
+	if !notified[post.UserID] {
+		notified[post.UserID] = true
+		s.notify(post.UserID, actorID, "new_comment", payload())
+	}
+
+	for _, username := range extractMentions(content) {
 		mentioned, err := s.store.GetUserByUsername(username)
-		if err != nil || mentioned.ID == userID {
+		if err != nil || mentioned.ID == actorID {
 			continue
 		}
-		s.notify(mentioned.ID, userID, "new_mention", map[string]interface{}{
-			"post_id":    postID,
-			"post_title": postTitle,
-			"comment_id": commentID,
-			"actor":      usernameFromCtx(r),
-		})
+		s.notify(mentioned.ID, actorID, "new_mention", payload())
 	}
-
-	jsonResponse(w, map[string]int{"id": commentID}, http.StatusCreated)
 }
 
 func (s *Server) likePost(w http.ResponseWriter, r *http.Request) {

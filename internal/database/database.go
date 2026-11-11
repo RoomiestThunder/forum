@@ -72,9 +72,14 @@ type Store interface {
 	CountBookmarkedPostsByUser(userID int) (int, error)
 
 	// Comment operations
-	CreateComment(postID, userID int, content string) (int, error)
+	// CreateComment adds a comment; a non-nil parentID makes it a reply, and
+	// the parent must belong to the same post.
+	CreateComment(postID, userID int, parentID *int, content string) (int, error)
+	GetComment(id int) (*models.Comment, error)
 	GetCommentsByPostID(postID int) ([]*models.Comment, error)
 	UpdateComment(id, userID int, content string) error
+	// DeleteComment removes a comment, or tombstones it if it has replies.
+	// Deleting a comment you don't own is a permission error.
 	DeleteComment(id, userID int) error
 
 	// Refresh token operations

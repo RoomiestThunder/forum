@@ -47,8 +47,13 @@ CREATE TABLE IF NOT EXISTS comments (
     post_id    INTEGER REFERENCES posts(id),
     user_id    INTEGER REFERENCES users(id),
     content    TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    parent_id  INTEGER REFERENCES comments(id),
+    depth      INTEGER NOT NULL DEFAULT 0,
+    deleted    BOOLEAN NOT NULL DEFAULT FALSE
 );
+CREATE INDEX IF NOT EXISTS comments_post_idx ON comments(post_id, created_at, id);
+CREATE INDEX IF NOT EXISTS comments_parent_idx ON comments(parent_id);
 
 CREATE TABLE IF NOT EXISTS post_likes (
     id      SERIAL PRIMARY KEY,

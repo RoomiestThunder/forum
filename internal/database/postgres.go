@@ -728,11 +728,28 @@ func (s *PostgresStore) CountBookmarkedPostsByUser(userID int) (int, error) {
 
 // ---- Comment operations ----
 
-func (s *PostgresStore) CreateComment(postID, userID int, content string) (int, error) {
+func (s *PostgresStore) CreateComment(postID, userID int, parentID *int, content string) (int, error) {
+	depth := 0
+	var parent interface{} // nil binds as NULL: a top-level comment
+	if parentID != nil {
+		var parentPost, parentDepth int
+		err := s.db.QueryRow("SELECT post_id, depth FROM comments WHERE id = $1", *parentID).Scan(&parentPost, &parentDepth)
+		if err == sql.ErrNoRows {
+			return 0, apperrors.NotFoundError("Parent comment")
+		}
+		if err != nil {
+			return 0, apperrors.DatabaseError(err)
+		}
+		if parentPost != postID {
+			return 0, apperrors.ValidationError("parent comment belongs to a different post")
+		}
+		depth = parentDepth + 1
+		parent = *parentID
+	}
 	var id int
 	err := s.db.QueryRow(
-		"INSERT INTO comments (post_id, user_id, content, created_at) VALUES ($1, $2, $3, $4) RETURNING id",
-		postID, userID, content, time.Now(),
+		"INSERT INTO comments (post_id, user_id, parent_id, depth, content, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+		postID, userID, parent, depth, content, time.Now(),
 	).Scan(&id)
 	if err != nil {
 		return 0, apperrors.DatabaseError(err)
@@ -740,30 +757,48 @@ func (s *PostgresStore) CreateComment(postID, userID int, content string) (int, 
 	return id, nil
 }
 
+const pgCommentSelect = `
+	SELECT c.id, c.post_id, c.user_id, c.parent_id, c.depth, c.content, c.created_at, u.username, c.deleted,
+		(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = TRUE),
+		(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = FALSE)
+	FROM comments c JOIN users u ON c.user_id = u.id`
+
+func (s *PostgresStore) GetComment(id int) (*models.Comment, error) {
+	c, err := scanComment(s.db.QueryRow(pgCommentSelect+" WHERE c.id = $1", id))
+	if err == sql.ErrNoRows {
+		return nil, apperrors.NotFoundError("Comment")
+	}
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return c, nil
+}
+
+// GetCommentsByPostID returns every comment of a post as a flat list, oldest
+// first; the reply structure is carried by ParentID and rebuilt by the client.
 func (s *PostgresStore) GetCommentsByPostID(postID int) ([]*models.Comment, error) {
-	rows, err := s.db.Query(`
-		SELECT c.id, c.post_id, c.user_id, c.content, c.created_at, u.username,
-			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = TRUE),
-			(SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id AND is_like = FALSE)
-		FROM comments c JOIN users u ON c.user_id = u.id
-		WHERE c.post_id = $1 ORDER BY c.created_at ASC`, postID)
+	rows, err := s.db.Query(pgCommentSelect+" WHERE c.post_id = $1 ORDER BY c.created_at ASC, c.id ASC", postID)
 	if err != nil {
 		return nil, apperrors.DatabaseError(err)
 	}
 	defer rows.Close()
 	var comments []*models.Comment
 	for rows.Next() {
-		var c models.Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Content, &c.CreatedAt, &c.Author, &c.Likes, &c.Dislikes); err != nil {
+		c, err := scanComment(rows)
+		if err != nil {
 			return nil, apperrors.DatabaseError(err)
 		}
-		comments = append(comments, &c)
+		comments = append(comments, c)
 	}
-	return comments, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return comments, nil
 }
 
+// UpdateComment edits a comment's text. A tombstone can't be edited back to life.
 func (s *PostgresStore) UpdateComment(id, userID int, content string) error {
-	res, err := s.db.Exec("UPDATE comments SET content = $1 WHERE id = $2 AND user_id = $3", content, id, userID)
+	res, err := s.db.Exec("UPDATE comments SET content = $1 WHERE id = $2 AND user_id = $3 AND deleted = FALSE", content, id, userID)
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
@@ -775,25 +810,86 @@ func (s *PostgresStore) UpdateComment(id, userID int, content string) error {
 }
 
 func (s *PostgresStore) DeleteComment(id, userID int) error {
-	return s.deleteComment(id, "id = $1 AND user_id = $2", id, userID)
+	return s.deleteComment(id, &userID)
 }
 
 // AdminDeleteComment removes a comment regardless of ownership.
 func (s *PostgresStore) AdminDeleteComment(id int) error {
-	return s.deleteComment(id, "id = $1", id)
+	return s.deleteComment(id, nil)
 }
 
-func (s *PostgresStore) deleteComment(id int, whereClause string, whereArgs ...interface{}) error {
-	_, _ = s.db.Exec("DELETE FROM comment_likes WHERE comment_id = $1", id)
-	res, err := s.db.Exec("DELETE FROM comments WHERE "+whereClause, whereArgs...)
+// deleteComment removes a comment, or - if other comments reply to it -
+// replaces it with a tombstone so the replies keep their place in the thread.
+// When the last reply under a tombstone goes, the tombstone goes with it. It
+// all happens in one transaction, and ownership is checked before anything is
+// touched: a rejected delete must not have side effects.
+//
+// ownerID nil means the caller may delete any comment (staff).
+func (s *PostgresStore) deleteComment(id int, ownerID *int) error {
+	tx, err := s.db.Begin()
 	if err != nil {
 		return apperrors.DatabaseError(err)
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	defer func() { _ = tx.Rollback() }()
+
+	var parent sql.NullInt64
+	var owner int
+	var deleted bool
+	// FOR UPDATE serialises concurrent deletes of the same thread, so two
+	// replies being deleted at once can't each decide the other still exists.
+	err = tx.QueryRow("SELECT parent_id, user_id, deleted FROM comments WHERE id = $1 FOR UPDATE", id).Scan(&parent, &owner, &deleted)
+	if err == sql.ErrNoRows {
+		return apperrors.NotFoundError("Comment")
+	}
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	if ownerID != nil && owner != *ownerID {
 		return apperrors.PermissionError("delete comment")
 	}
-	return nil
+	if deleted {
+		return apperrors.NotFoundError("Comment")
+	}
+
+	if _, err := tx.Exec("DELETE FROM comment_likes WHERE comment_id = $1", id); err != nil {
+		return apperrors.DatabaseError(err)
+	}
+
+	var hasReplies bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM comments WHERE parent_id = $1)", id).Scan(&hasReplies); err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	if hasReplies {
+		if _, err := tx.Exec("UPDATE comments SET deleted = TRUE, content = '' WHERE id = $1", id); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		return commitComments(tx)
+	}
+
+	// A leaf: remove it, then any chain of now-childless tombstones above it.
+	current := id
+	for {
+		if _, err := tx.Exec("DELETE FROM comments WHERE id = $1", current); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if !parent.Valid {
+			break
+		}
+		parentID := int(parent.Int64)
+		var parentDeleted, stillHasReplies bool
+		var grandparent sql.NullInt64
+		if err := tx.QueryRow("SELECT deleted, parent_id FROM comments WHERE id = $1", parentID).Scan(&parentDeleted, &grandparent); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM comments WHERE parent_id = $1)", parentID).Scan(&stillHasReplies); err != nil {
+			return apperrors.DatabaseError(err)
+		}
+		if !parentDeleted || stillHasReplies {
+			break
+		}
+		current, parent = parentID, grandparent
+	}
+	return commitComments(tx)
 }
 
 // ---- Refresh token operations ----

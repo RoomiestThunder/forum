@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +30,8 @@ type Options struct {
 	// X-Real-IP. Enable it only behind a reverse proxy that sets them;
 	// otherwise clients could spoof their way past the limits.
 	TrustProxy bool
+	// Logger receives internal errors. Defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 type Server struct {
@@ -49,6 +52,8 @@ type Server struct {
 	// unreachable, so limits keep holding in cache-degraded mode.
 	limiters   map[string]*appmw.RateLimiter
 	trustProxy bool
+
+	logger *slog.Logger
 }
 
 func NewServer(
@@ -71,6 +76,10 @@ func NewServer(
 
 		limiters:   newLocalLimiters(),
 		trustProxy: opts.TrustProxy,
+		logger:     opts.Logger,
+	}
+	if s.logger == nil {
+		s.logger = slog.Default()
 	}
 	if opts.GitHubClientID != "" && opts.GitHubClientSecret != "" {
 		s.githubOAuth = &oauth2.Config{
