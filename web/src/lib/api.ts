@@ -16,34 +16,41 @@ export class ApiError extends Error {
 // which matters because the backend rotates the refresh token on use.
 let refreshInFlight: Promise<boolean> | null = null
 
-async function refreshSession(): Promise<boolean> {
-  refreshInFlight ??= (async () => {
-    const { refreshToken } = useAuth.getState()
-    if (!refreshToken) return false
-    try {
-      const res = await fetch(`${BASE}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      })
-      if (!res.ok) {
-        useAuth.getState().clearSession()
-        return false
-      }
-      const data = (await res.json()) as AuthResponse
-      useAuth.getState().setSession({
-        userId: data.user_id,
-        username: data.username,
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-      })
-      return true
-    } catch {
+async function performRefresh(): Promise<boolean> {
+  const { refreshToken } = useAuth.getState()
+  if (!refreshToken) return false
+  try {
+    const res = await fetch(`${BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    if (!res.ok) {
+      useAuth.getState().clearSession()
       return false
-    } finally {
-      refreshInFlight = null
     }
-  })()
+    const data = (await res.json()) as AuthResponse
+    useAuth.getState().setSession({
+      userId: data.user_id,
+      username: data.username,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function refreshSession(): Promise<boolean> {
+  // The slot is cleared with .finally() on the stored promise rather than from
+  // inside performRefresh: if that function settled without ever awaiting, a
+  // finally block inside it would run before the promise was stored, and the
+  // already-finished promise would then sit in the slot for good, turning every
+  // later refresh into a silent no-op.
+  refreshInFlight ??= performRefresh().finally(() => {
+    refreshInFlight = null
+  })
   return refreshInFlight
 }
 
