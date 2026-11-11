@@ -12,6 +12,7 @@ import (
 
 	"forum/internal/auth"
 	"forum/internal/database"
+	"forum/internal/database/dbtest"
 	ws "forum/internal/websocket"
 
 	"github.com/go-chi/chi/v5"
@@ -43,12 +44,9 @@ func newTestServerWithOptions(t *testing.T, opts Options) (*httptest.Server, dat
 // websocket endpoint, as in production without one).
 func newTestServerFull(t *testing.T, opts Options, hub *ws.Hub) (*httptest.Server, database.Store) {
 	t.Helper()
-	db, err := database.InitSQLite(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := database.NewSQLiteStoreWithoutLogger(db)
-	t.Cleanup(func() { _ = store.Close() })
+	// SQLite by default; TEST_STORE=postgres runs the whole suite against
+	// PostgreSQL (see dbtest).
+	store := dbtest.Default(t)
 
 	jwtManager := auth.NewManager("test-secret", 15*time.Minute, 24*time.Hour)
 	r := chi.NewRouter()

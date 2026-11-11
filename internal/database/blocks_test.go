@@ -1,13 +1,14 @@
-package database
+package database_test
 
 import (
 	"reflect"
 	"testing"
 
+	"forum/internal/database"
 	"forum/internal/models"
 )
 
-func blockedNames(t *testing.T, s Store, blocker int) []string {
+func blockedNames(t *testing.T, s database.Store, blocker int) []string {
 	t.Helper()
 	users, err := s.ListBlockedUsers(blocker)
 	if err != nil {
@@ -21,7 +22,7 @@ func blockedNames(t *testing.T, s Store, blocker int) []string {
 }
 
 func TestBlockRoundTrip(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice, bob := mustUser(t, s, "alice"), mustUser(t, s, "bob")
 
 		if blocked, err := s.IsBlocked(alice, bob); err != nil || blocked {
@@ -61,7 +62,7 @@ func TestBlockRoundTrip(t *testing.T) {
 }
 
 func TestBlockAndUnblockAreIdempotent(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice, bob := mustUser(t, s, "alice"), mustUser(t, s, "bob")
 
 		for i := 0; i < 2; i++ {
@@ -82,7 +83,7 @@ func TestBlockAndUnblockAreIdempotent(t *testing.T) {
 }
 
 func TestCannotBlockYourself(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		if err := s.BlockUser(alice, alice); err == nil {
 			t.Fatal("blocking yourself must be rejected by the database")
@@ -91,7 +92,7 @@ func TestCannotBlockYourself(t *testing.T) {
 }
 
 func TestBlockedListIsPerUserAndNewestFirst(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice, bob, carol, dave := mustUser(t, s, "alice"), mustUser(t, s, "bob"), mustUser(t, s, "carol"), mustUser(t, s, "dave")
 
 		for _, target := range []int{bob, carol} {

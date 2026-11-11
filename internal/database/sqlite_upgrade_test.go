@@ -1,9 +1,11 @@
-package database
+package database_test
 
 import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+
+	"forum/internal/database"
 )
 
 // legacySQLiteSchema is the database a first-generation build created: the
@@ -53,11 +55,11 @@ func TestSQLiteUpgradesAnOlderDatabaseInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := InitSQLite(path)
+	db, err := database.InitSQLite(path)
 	if err != nil {
 		t.Fatalf("opening an older database must upgrade it, not fail: %v", err)
 	}
-	store := NewSQLiteStoreWithoutLogger(db)
+	store := database.NewSQLiteStoreWithoutLogger(db)
 	t.Cleanup(func() { _ = store.Close() })
 
 	// Existing data is intact and picks up the defaults of the new columns.
@@ -98,7 +100,7 @@ func TestSQLiteUpgradesAnOlderDatabaseInPlace(t *testing.T) {
 func TestSQLiteUpgradeIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "forum.db")
 	for i := 1; i <= 3; i++ {
-		db, err := InitSQLite(path)
+		db, err := database.InitSQLite(path)
 		if err != nil {
 			t.Fatalf("open #%d: %v", i, err)
 		}

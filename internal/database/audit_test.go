@@ -1,11 +1,13 @@
-package database
+package database_test
 
 import (
 	"testing"
+
+	"forum/internal/database"
 )
 
 func TestAuditEntryRoundTrip(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		admin := mustUser(t, s, "admin")
 
 		details := `{"title":"Spam post","author":"mallory"}`
@@ -37,7 +39,7 @@ func TestAuditEntryRoundTrip(t *testing.T) {
 }
 
 func TestAuditEntriesAreNewestFirstAndPaginated(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		admin := mustUser(t, s, "admin")
 		for i := 1; i <= 5; i++ {
 			if err := s.CreateAuditEntry(admin, "post.pin", "post", i, "{}"); err != nil {
@@ -77,7 +79,7 @@ func TestAuditEntriesAreNewestFirstAndPaginated(t *testing.T) {
 }
 
 func TestEmptyAuditLog(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		entries, err := s.ListAuditEntries(10, 0)
 		if err != nil || len(entries) != 0 {
 			t.Fatalf("an empty log lists nothing: %v, %v", entries, err)

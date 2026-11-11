@@ -103,6 +103,16 @@ jobs:
           JWT_SECRET: test-secret
         run: go test -race -short -coverprofile=coverage.out ./...
 
+      # The API suite uses SQLite above. SQLite and PostgreSQL are separate
+      # implementations of the Store interface, so run every API test against
+      # PostgreSQL too. TEST_STORE=postgres makes an unreachable database a
+      # failure rather than a skip, so this step can't pass without running.
+      - name: Run API tests against PostgreSQL
+        env:
+          TEST_STORE: postgres
+          TEST_DATABASE_URL: postgres://forum:forum@localhost:5432/forum_test?sslmode=disable
+        run: go test -race -short ./internal/api/...
+
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:

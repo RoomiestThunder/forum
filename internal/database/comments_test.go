@@ -1,14 +1,15 @@
-package database
+package database_test
 
 import (
 	stderrors "errors"
 	"net/http"
 	"testing"
 
+	"forum/internal/database"
 	apperrors "forum/internal/errors"
 )
 
-func mustPost(t *testing.T, s Store, userID int, title string) int {
+func mustPost(t *testing.T, s database.Store, userID int, title string) int {
 	t.Helper()
 	id, err := s.CreatePost(userID, title, "content", []int{1}, "", false)
 	if err != nil {
@@ -17,7 +18,7 @@ func mustPost(t *testing.T, s Store, userID int, title string) int {
 	return id
 }
 
-func mustComment(t *testing.T, s Store, postID, userID int, parentID *int, text string) int {
+func mustComment(t *testing.T, s database.Store, postID, userID int, parentID *int, text string) int {
 	t.Helper()
 	id, err := s.CreateComment(postID, userID, parentID, text)
 	if err != nil {
@@ -35,7 +36,7 @@ func statusOf(err error) int {
 	return 0
 }
 
-func commentIDs(t *testing.T, s Store, postID int) []int {
+func commentIDs(t *testing.T, s database.Store, postID int) []int {
 	t.Helper()
 	comments, err := s.GetCommentsByPostID(postID)
 	if err != nil {
@@ -49,7 +50,7 @@ func commentIDs(t *testing.T, s Store, postID int) []int {
 }
 
 func TestRepliesRecordParentAndDepth(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 
@@ -79,7 +80,7 @@ func TestRepliesRecordParentAndDepth(t *testing.T) {
 }
 
 func TestReplyParentMustExistAndShareThePost(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		postA, postB := mustPost(t, s, alice, "a"), mustPost(t, s, alice, "b")
 		onA := mustComment(t, s, postA, alice, nil, "on a")
@@ -95,7 +96,7 @@ func TestReplyParentMustExistAndShareThePost(t *testing.T) {
 }
 
 func TestCommentsListedFlatOldestFirst(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 		a := mustComment(t, s, post, alice, nil, "a")
@@ -111,7 +112,7 @@ func TestCommentsListedFlatOldestFirst(t *testing.T) {
 }
 
 func TestGetCommentNotFound(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		if _, err := s.GetComment(12345); statusOf(err) != http.StatusNotFound {
 			t.Fatalf("want 404, got %d (%v)", statusOf(err), err)
 		}
@@ -119,7 +120,7 @@ func TestGetCommentNotFound(t *testing.T) {
 }
 
 func TestDeleteLeafRemovesIt(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 		c := mustComment(t, s, post, alice, nil, "only")
@@ -134,7 +135,7 @@ func TestDeleteLeafRemovesIt(t *testing.T) {
 }
 
 func TestDeleteWithRepliesLeavesATombstone(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice, bob := mustUser(t, s, "alice"), mustUser(t, s, "bob")
 		post := mustPost(t, s, alice, "thread")
 		parent := mustComment(t, s, post, alice, nil, "secret words")
@@ -165,7 +166,7 @@ func TestDeleteWithRepliesLeavesATombstone(t *testing.T) {
 }
 
 func TestTombstoneIsRemovedWhenItsLastReplyGoes(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 		a := mustComment(t, s, post, alice, nil, "a")
@@ -193,7 +194,7 @@ func TestTombstoneIsRemovedWhenItsLastReplyGoes(t *testing.T) {
 }
 
 func TestTombstoneStaysWhileASiblingReplyRemains(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 		parent := mustComment(t, s, post, alice, nil, "parent")
@@ -221,7 +222,7 @@ func TestTombstoneStaysWhileASiblingReplyRemains(t *testing.T) {
 // A delete the caller isn't allowed to make used to wipe the comment's likes
 // before the ownership check failed, so anyone could clear anyone's likes.
 func TestRejectedDeleteHasNoSideEffects(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice, bob := mustUser(t, s, "alice"), mustUser(t, s, "bob")
 		post := mustPost(t, s, alice, "thread")
 		c := mustComment(t, s, post, alice, nil, "alice's comment")
@@ -247,7 +248,7 @@ func TestRejectedDeleteHasNoSideEffects(t *testing.T) {
 }
 
 func TestDeletingTwiceOrDeletingNothingIsNotFound(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 		parent := mustComment(t, s, post, alice, nil, "parent")
@@ -266,7 +267,7 @@ func TestDeletingTwiceOrDeletingNothingIsNotFound(t *testing.T) {
 }
 
 func TestAdminDeleteIgnoresOwnership(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 		c := mustComment(t, s, post, alice, nil, "spam")
@@ -281,7 +282,7 @@ func TestAdminDeleteIgnoresOwnership(t *testing.T) {
 }
 
 func TestUpdateCommentOwnerOnlyAndNotOnTombstones(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice, bob := mustUser(t, s, "alice"), mustUser(t, s, "bob")
 		post := mustPost(t, s, alice, "thread")
 		c := mustComment(t, s, post, alice, nil, "before")
@@ -312,7 +313,7 @@ func TestUpdateCommentOwnerOnlyAndNotOnTombstones(t *testing.T) {
 // Deleting a post removes a whole thread of self-referencing comments in one
 // statement; PostgreSQL has to accept that despite the parent_id foreign key.
 func TestDeletingAPostRemovesItsWholeThread(t *testing.T) {
-	forEachStore(t, func(t *testing.T, s Store) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
 		alice := mustUser(t, s, "alice")
 		post := mustPost(t, s, alice, "thread")
 		a := mustComment(t, s, post, alice, nil, "a")
