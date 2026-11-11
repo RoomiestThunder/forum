@@ -83,9 +83,12 @@ type Store interface {
 	DeleteComment(id, userID int) error
 
 	// Refresh token operations
-	CreateRefreshToken(userID int, token string) error
-	GetRefreshToken(token string) (*models.RefreshToken, error)
-	DeleteRefreshToken(token string) error
+	CreateRefreshToken(userID int, token string, expiresAt time.Time) error
+	// ConsumeRefreshToken atomically deletes a valid (unexpired) token and
+	// returns it. A token can be consumed once: of any number of concurrent
+	// attempts exactly one succeeds, the rest get a not-found error. That is
+	// what makes refresh-token rotation safe against replay.
+	ConsumeRefreshToken(token string) (*models.RefreshToken, error)
 	DeleteRefreshTokensByUser(userID int) error
 
 	// Like/Vote operations

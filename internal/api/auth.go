@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	apperrors "forum/internal/errors"
 
@@ -140,9 +142,18 @@ func (s *Server) refreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rt, err := s.store.GetRefreshToken(body.RefreshToken)
+	// Consuming the token is the rotation: it deletes the old one and succeeds
+	// for exactly one caller, so a replayed or raced token gets a 401 instead of
+	// a second valid pair. It happens before the checks below, deliberately: a
+	// token presented for a banned or deleted account is spent as well.
+	rt, err := s.store.ConsumeRefreshToken(body.RefreshToken)
 	if err != nil {
-		jsonError(w, "invalid or expired refresh token", http.StatusUnauthorized)
+		var appErr *apperrors.AppError
+		if errors.As(err, &appErr) && appErr.HTTPStatusCode() == http.StatusNotFound {
+			jsonError(w, "invalid or expired refresh token", http.StatusUnauthorized)
+			return
+		}
+		s.storeError(w, r, err, "refresh session")
 		return
 	}
 
@@ -156,15 +167,9 @@ func (s *Server) refreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rotate: delete old token first; if delete fails the old token remains valid,
-	// so we must abort rather than issuing a second valid token.
-	if err := s.store.DeleteRefreshToken(body.RefreshToken); err != nil {
-		jsonError(w, "token rotation failed", http.StatusInternalServerError)
-		return
-	}
 	tokens, err := s.issueTokens(user.ID, user.Username)
 	if err != nil {
-		jsonError(w, "token generation failed", http.StatusInternalServerError)
+		s.storeError(w, r, err, "issue tokens")
 		return
 	}
 
@@ -202,8 +207,9 @@ func (s *Server) issueTokens(userID int, username string) (*struct{ AccessToken,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.store.CreateRefreshToken(userID, refresh); err != nil {
-		return nil, apperrors.DatabaseError(err)
+	expiresAt := time.Now().Add(s.jwt.RefreshDuration())
+	if err := s.store.CreateRefreshToken(userID, refresh, expiresAt); err != nil {
+		return nil, err
 	}
 	return &struct{ AccessToken, RefreshToken string }{access, refresh}, nil
 }

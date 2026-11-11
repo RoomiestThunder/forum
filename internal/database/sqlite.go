@@ -1212,16 +1212,24 @@ func commitComments(tx *sql.Tx) error {
 
 // ---- Refresh token operations ----
 
-func (s *SQLiteStore) CreateRefreshToken(userID int, token string) error {
-	expires := time.Now().Add(7 * 24 * time.Hour)
-	_, err := s.db.Exec("INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, ?)", userID, token, expires)
-	return err
+func (s *SQLiteStore) CreateRefreshToken(userID int, token string, expiresAt time.Time) error {
+	_, err := s.db.Exec("INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, ?)", userID, token, expiresAt)
+	if err != nil {
+		return apperrors.DatabaseError(err)
+	}
+	return nil
 }
 
-func (s *SQLiteStore) GetRefreshToken(token string) (*models.RefreshToken, error) {
+// ConsumeRefreshToken deletes and returns an unexpired token in one statement.
+// Reading it and deleting it separately would let two concurrent requests with
+// the same token both read it before either deleted it, and both be issued a
+// fresh pair.
+func (s *SQLiteStore) ConsumeRefreshToken(token string) (*models.RefreshToken, error) {
 	var rt models.RefreshToken
-	err := s.db.QueryRow("SELECT id, user_id, token, expires_at FROM refresh_tokens WHERE token = ? AND expires_at > ?", token, time.Now()).
-		Scan(&rt.ID, &rt.UserID, &rt.Token, &rt.ExpiresAt)
+	err := s.db.QueryRow(
+		"DELETE FROM refresh_tokens WHERE token = ? AND expires_at > ? RETURNING id, user_id, token, expires_at",
+		token, time.Now(),
+	).Scan(&rt.ID, &rt.UserID, &rt.Token, &rt.ExpiresAt)
 	if err == sql.ErrNoRows {
 		return nil, apperrors.NotFoundError("RefreshToken")
 	}
@@ -1229,11 +1237,6 @@ func (s *SQLiteStore) GetRefreshToken(token string) (*models.RefreshToken, error
 		return nil, apperrors.DatabaseError(err)
 	}
 	return &rt, nil
-}
-
-func (s *SQLiteStore) DeleteRefreshToken(token string) error {
-	_, err := s.db.Exec("DELETE FROM refresh_tokens WHERE token = ?", token)
-	return err
 }
 
 func (s *SQLiteStore) DeleteRefreshTokensByUser(userID int) error {

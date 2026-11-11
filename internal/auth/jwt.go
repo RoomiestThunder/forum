@@ -35,6 +35,9 @@ func NewManager(secret string, accessDuration, refreshDuration time.Duration) *M
 	}
 }
 
+// RefreshDuration is how long a refresh token stays valid.
+func (m *Manager) RefreshDuration() time.Duration { return m.refreshDuration }
+
 // GenerateAccessToken creates a signed JWT access token.
 func (m *Manager) GenerateAccessToken(userID int, username string) (string, error) {
 	claims := Claims{
