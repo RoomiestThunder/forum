@@ -2,6 +2,7 @@ package database_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"forum/internal/database"
@@ -42,6 +43,22 @@ func TestFirstUserBecomesAdminAndOnlyTheFirst(t *testing.T) {
 		}
 		if u, _ := s.GetUserByID(second); u.IsAdmin {
 			t.Error("later accounts must not be admins")
+		}
+	})
+}
+
+// Emails are compared ignoring case by login, password reset and OAuth linking,
+// so a case-variant of an existing address would be a second account for the
+// same mailbox.
+func TestEmailsAreUniqueIgnoringCase(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s database.Store) {
+		mustUser(t, s, "alice") // alice@example.com
+
+		for _, email := range []string{"ALICE@example.com", "Alice@Example.COM"} {
+			_, err := s.CreateUser(email, "someone_"+strings.ToLower(email[:3]), "hash")
+			if statusOf(err) != http.StatusConflict {
+				t.Errorf("%q: want 409, got %d (%v)", email, statusOf(err), err)
+			}
 		}
 	})
 }

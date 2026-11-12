@@ -46,6 +46,8 @@ type Server struct {
 	// githubOAuth is nil when GitHub OAuth isn't configured; routes and the
 	// providers endpoint check for that instead of a separate bool.
 	githubOAuth *oauth2.Config
+	// githubAPI is the base URL of GitHub's REST API; tests point it at a fake.
+	githubAPI string
 
 	// limiters are the in-process rate limiters, one per policy. They serve as
 	// the limiter when Redis isn't configured and as the fallback when it is
@@ -76,6 +78,7 @@ func NewServer(
 		limiters:   newLocalLimiters(),
 		trustProxy: opts.TrustProxy,
 		logger:     opts.Logger,
+		githubAPI:  defaultGitHubAPI,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()

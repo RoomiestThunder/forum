@@ -264,6 +264,7 @@ func sqliteSchema(db *sql.DB) error {
 		WHERE LOWER(o.username) = LOWER(users.username) AND o.id < users.id
 	);
 	CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username));
+	CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users (LOWER(email));
 	`); err != nil {
 		return err
 	}
@@ -337,6 +338,16 @@ func (s *SQLiteStore) CreateUser(email, username, passwordHash string) (int, err
 	var userCount int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
 		return 0, apperrors.DatabaseError(err)
+	}
+	// Emails are compared ignoring case everywhere else (login, reset, linking),
+	// so a case-variant of an existing address would be a second account for the
+	// same mailbox. The unique index only catches an exact match.
+	var emailTaken bool
+	if err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE LOWER(email) = LOWER(?))", email).Scan(&emailTaken); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	if emailTaken {
+		return 0, errAccountTaken()
 	}
 	res, err := s.db.Exec(
 		"INSERT INTO users (email, username, password, is_admin) VALUES (?, ?, ?, ?)",
@@ -472,6 +483,20 @@ func (s *SQLiteStore) ConsumePasswordResetToken(token string) (int, error) {
 // FindOrCreateOAuthUser links or creates a local account for an OAuth
 // identity: an existing link wins, then an existing account matching the
 // provider's email, then a brand new account with a de-duplicated username.
+// FindOrCreateOAuthUser resolves a provider identity to a local account.
+//
+// email must be an address the provider has VERIFIED the user owns, or empty.
+// It is used to attach the identity to an existing account with the same
+// address, so passing an unverified one would let anyone take over an account
+// by claiming its email at the provider.
+//
+// Linking carries a second hazard: registration doesn't verify email, so
+// someone can have created the existing account - with a password they know -
+// before its real owner ever showed up. If that account's email was never
+// verified, linking therefore also strips whatever credentials it had (password,
+// sessions, outstanding reset and verification tokens) and marks the email
+// verified, so the person who proved ownership at the provider is the only one
+// left with access.
 func (s *SQLiteStore) FindOrCreateOAuthUser(provider, providerUserID, email, preferredUsername, avatarURL string) (*models.User, error) {
 	var userID int
 	err := s.db.QueryRow(
@@ -485,46 +510,90 @@ func (s *SQLiteStore) FindOrCreateOAuthUser(provider, providerUserID, email, pre
 	}
 
 	if email == "" {
-		email = fmt.Sprintf("%s-%s@users.noreply.%s", provider, providerUserID, provider)
+		email = oauthNoreplyEmail(provider, providerUserID)
+	}
+	if existing, err := s.GetUserByEmail(email); err == nil {
+		return s.linkOAuthIdentity(existing, provider, providerUserID)
 	}
 
-	if u, err := s.GetUserByEmail(email); err == nil {
-		if _, err := s.db.Exec(
-			"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES (?, ?, ?)", u.ID, provider, providerUserID,
-		); err != nil {
-			return nil, apperrors.DatabaseError(err)
-		}
-		return u, nil
-	}
-
-	username := preferredUsername
-	for i := 0; ; i++ {
-		if i > 0 {
-			username = fmt.Sprintf("%s%d", preferredUsername, i)
-		}
-		if _, err := s.GetUserByUsername(username); err != nil {
+	// Look for a free username by trying to create the account, rather than
+	// checking first: a check followed by an insert loses to a concurrent
+	// sign-up, and the unique index then makes that insert fail.
+	base := oauthBaseUsername(preferredUsername)
+	placeholder := oauthPlaceholderPassword(provider, providerUserID)
+	newUserID := 0
+	for attempt := 0; attempt < maxUsernameAttempts; attempt++ {
+		id, err := s.CreateUser(email, usernameCandidate(base, attempt), placeholder)
+		if err == nil {
+			newUserID = id
 			break
 		}
+		if !isConflict(err) {
+			return nil, err
+		}
+		// A conflict is a taken username - or the email having just been
+		// registered by someone else, in which case this is now a link.
+		if existing, lookupErr := s.GetUserByEmail(email); lookupErr == nil {
+			return s.linkOAuthIdentity(existing, provider, providerUserID)
+		}
+	}
+	if newUserID == 0 {
+		return nil, errAccountTaken()
 	}
 
-	// This can never match a real bcrypt hash, so password login is
-	// impossible for OAuth-only accounts until they set one explicitly.
-	placeholder := "oauth:" + provider + ":" + providerUserID
-	newUserID, err := s.CreateUser(email, username, placeholder)
-	if err != nil {
-		return nil, err
-	}
 	if avatarURL != "" {
-		_ = s.UpdateUserAvatar(newUserID, avatarURL)
+		if err := s.UpdateUserAvatar(newUserID, avatarURL); err != nil {
+			return nil, err
+		}
 	}
-	_ = s.SetEmailVerified(newUserID) // the provider already verified it
-
+	// The provider vouched for the address.
+	if err := s.SetEmailVerified(newUserID); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
 	if _, err := s.db.Exec(
 		"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES (?, ?, ?)", newUserID, provider, providerUserID,
 	); err != nil {
 		return nil, apperrors.DatabaseError(err)
 	}
 	return s.GetUserByID(newUserID)
+}
+
+// linkOAuthIdentity attaches a provider identity to an existing account, taking
+// the account over first if its email was never verified (see
+// FindOrCreateOAuthUser).
+func (s *SQLiteStore) linkOAuthIdentity(u *models.User, provider, providerUserID string) (*models.User, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if !u.EmailVerified {
+		for _, stmt := range []string{
+			"DELETE FROM refresh_tokens WHERE user_id = ?",
+			"DELETE FROM password_reset_tokens WHERE user_id = ?",
+			"DELETE FROM email_verification_tokens WHERE user_id = ?",
+		} {
+			if _, err := tx.Exec(stmt, u.ID); err != nil {
+				return nil, apperrors.DatabaseError(err)
+			}
+		}
+		if _, err := tx.Exec(
+			"UPDATE users SET password = ?, email_verified = 1 WHERE id = ?",
+			oauthPlaceholderPassword(provider, providerUserID), u.ID,
+		); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES (?, ?, ?)", u.ID, provider, providerUserID,
+	); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return s.GetUserByID(u.ID)
 }
 
 // ---- Admin operations ----

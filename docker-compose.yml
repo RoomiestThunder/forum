@@ -54,6 +54,7 @@ services:
       - ./migrations/011_threaded_comments.up.sql:/docker-entrypoint-initdb.d/011_threaded_comments.sql
       - ./migrations/012_audit_log.up.sql:/docker-entrypoint-initdb.d/012_audit_log.sql
       - ./migrations/013_unique_usernames.up.sql:/docker-entrypoint-initdb.d/013_unique_usernames.sql
+      - ./migrations/014_email_lookup_index.up.sql:/docker-entrypoint-initdb.d/014_email_lookup_index.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U forum"]
       interval: 5s

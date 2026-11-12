@@ -4,13 +4,18 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 )
 
-const githubStateCookie = "gh_oauth_state"
+const (
+	githubStateCookie = "gh_oauth_state"
+	defaultGitHubAPI  = "https://api.github.com"
+)
 
 // authProviders tells the SPA which "sign in with X" buttons to render -
 // there's no point showing a GitHub button that 503s because the server
@@ -82,28 +87,28 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) {
 	client := s.githubOAuth.Client(r.Context(), token)
 
 	var ghUser githubUser
-	if err := getJSON(client, "https://api.github.com/user", &ghUser); err != nil {
+	if err := getJSON(client, s.githubAPI+"/user", &ghUser); err != nil || ghUser.ID == 0 {
+		if err != nil {
+			s.logger.Warn("github profile fetch failed", slog.Any("err", err))
+		}
 		jsonError(w, "failed to fetch github profile", http.StatusBadGateway)
 		return
 	}
 
-	email := ghUser.Email
-	if email == "" {
-		var emails []githubEmail
-		if err := getJSON(client, "https://api.github.com/user/emails", &emails); err == nil {
-			for _, e := range emails {
-				if e.Primary && e.Verified {
-					email = e.Email
-					break
-				}
-			}
-		}
-	}
+	// Only an address GitHub has verified is used. It decides which existing
+	// account this sign-in is attached to, so an unverified one - which anyone can
+	// type into their GitHub profile - would let them take over that account.
+	// The public email on the profile is deliberately ignored for this reason.
+	email := s.verifiedGitHubEmail(client)
 
 	providerUserID := strconv.Itoa(ghUser.ID)
 	user, err := s.store.FindOrCreateOAuthUser("github", providerUserID, email, ghUser.Login, ghUser.AvatarURL)
 	if err != nil {
 		s.storeError(w, r, err, "create account")
+		return
+	}
+	if user.Banned {
+		jsonError(w, "account suspended", http.StatusForbidden)
 		return
 	}
 
@@ -125,13 +130,44 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.baseURL+"/oauth/callback#"+frag.Encode(), http.StatusFound)
 }
 
+// verifiedGitHubEmail returns the user's primary verified address, else any
+// verified one, else "" - including when the lookup fails, in which case the
+// sign-in simply can't be linked to an existing account.
+func (s *Server) verifiedGitHubEmail(client *http.Client) string {
+	var emails []githubEmail
+	if err := getJSON(client, s.githubAPI+"/user/emails", &emails); err != nil {
+		s.logger.Warn("github email lookup failed", slog.Any("err", err))
+		return ""
+	}
+	fallback := ""
+	for _, e := range emails {
+		if !e.Verified || e.Email == "" {
+			continue
+		}
+		if e.Primary {
+			return e.Email
+		}
+		if fallback == "" {
+			fallback = e.Email
+		}
+	}
+	return fallback
+}
+
+// getJSON GETs url and decodes the JSON body into out. A non-200 response is an
+// error: GitHub answers a bad or revoked token with a JSON error object, which
+// would otherwise decode into an empty struct and look like a successful
+// lookup of a user with id 0.
 func getJSON(client *http.Client, url string, out interface{}) error {
 	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return err
 	}

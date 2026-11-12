@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username));
+CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users (LOWER(email));
 
 CREATE TABLE IF NOT EXISTS categories (
     id   SERIAL PRIMARY KEY,

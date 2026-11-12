@@ -60,6 +60,16 @@ func (s *PostgresStore) CreateUser(email, username, passwordHash string) (int, e
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
 		return 0, apperrors.DatabaseError(err)
 	}
+	// Emails are compared ignoring case everywhere else (login, reset, linking),
+	// so a case-variant of an existing address would be a second account for the
+	// same mailbox. The unique index only catches an exact match.
+	var emailTaken bool
+	if err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE LOWER(email) = LOWER($1))", email).Scan(&emailTaken); err != nil {
+		return 0, apperrors.DatabaseError(err)
+	}
+	if emailTaken {
+		return 0, errAccountTaken()
+	}
 	var id int
 	err := s.db.QueryRow(
 		"INSERT INTO users (email, username, password, is_admin) VALUES ($1, $2, $3, $4) RETURNING id",
@@ -193,6 +203,20 @@ func (s *PostgresStore) ConsumePasswordResetToken(token string) (int, error) {
 	return userID, nil
 }
 
+// FindOrCreateOAuthUser resolves a provider identity to a local account.
+//
+// email must be an address the provider has VERIFIED the user owns, or empty.
+// It is used to attach the identity to an existing account with the same
+// address, so passing an unverified one would let anyone take over an account
+// by claiming its email at the provider.
+//
+// Linking carries a second hazard: registration doesn't verify email, so
+// someone can have created the existing account - with a password they know -
+// before its real owner ever showed up. If that account's email was never
+// verified, linking therefore also strips whatever credentials it had (password,
+// sessions, outstanding reset and verification tokens) and marks the email
+// verified, so the person who proved ownership at the provider is the only one
+// left with access.
 func (s *PostgresStore) FindOrCreateOAuthUser(provider, providerUserID, email, preferredUsername, avatarURL string) (*models.User, error) {
 	var userID int
 	err := s.db.QueryRow(
@@ -206,44 +230,90 @@ func (s *PostgresStore) FindOrCreateOAuthUser(provider, providerUserID, email, p
 	}
 
 	if email == "" {
-		email = fmt.Sprintf("%s-%s@users.noreply.%s", provider, providerUserID, provider)
+		email = oauthNoreplyEmail(provider, providerUserID)
+	}
+	if existing, err := s.GetUserByEmail(email); err == nil {
+		return s.linkOAuthIdentity(existing, provider, providerUserID)
 	}
 
-	if u, err := s.GetUserByEmail(email); err == nil {
-		if _, err := s.db.Exec(
-			"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, $2, $3)", u.ID, provider, providerUserID,
-		); err != nil {
-			return nil, apperrors.DatabaseError(err)
-		}
-		return u, nil
-	}
-
-	username := preferredUsername
-	for i := 0; ; i++ {
-		if i > 0 {
-			username = fmt.Sprintf("%s%d", preferredUsername, i)
-		}
-		if _, err := s.GetUserByUsername(username); err != nil {
+	// Look for a free username by trying to create the account, rather than
+	// checking first: a check followed by an insert loses to a concurrent
+	// sign-up, and the unique index then makes that insert fail.
+	base := oauthBaseUsername(preferredUsername)
+	placeholder := oauthPlaceholderPassword(provider, providerUserID)
+	newUserID := 0
+	for attempt := 0; attempt < maxUsernameAttempts; attempt++ {
+		id, err := s.CreateUser(email, usernameCandidate(base, attempt), placeholder)
+		if err == nil {
+			newUserID = id
 			break
 		}
+		if !isConflict(err) {
+			return nil, err
+		}
+		// A conflict is a taken username - or the email having just been
+		// registered by someone else, in which case this is now a link.
+		if existing, lookupErr := s.GetUserByEmail(email); lookupErr == nil {
+			return s.linkOAuthIdentity(existing, provider, providerUserID)
+		}
+	}
+	if newUserID == 0 {
+		return nil, errAccountTaken()
 	}
 
-	placeholder := "oauth:" + provider + ":" + providerUserID
-	newUserID, err := s.CreateUser(email, username, placeholder)
-	if err != nil {
-		return nil, err
-	}
 	if avatarURL != "" {
-		_ = s.UpdateUserAvatar(newUserID, avatarURL)
+		if err := s.UpdateUserAvatar(newUserID, avatarURL); err != nil {
+			return nil, err
+		}
 	}
-	_ = s.SetEmailVerified(newUserID)
-
+	// The provider vouched for the address.
+	if err := s.SetEmailVerified(newUserID); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
 	if _, err := s.db.Exec(
 		"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, $2, $3)", newUserID, provider, providerUserID,
 	); err != nil {
 		return nil, apperrors.DatabaseError(err)
 	}
 	return s.GetUserByID(newUserID)
+}
+
+// linkOAuthIdentity attaches a provider identity to an existing account, taking
+// the account over first if its email was never verified (see
+// FindOrCreateOAuthUser).
+func (s *PostgresStore) linkOAuthIdentity(u *models.User, provider, providerUserID string) (*models.User, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if !u.EmailVerified {
+		for _, stmt := range []string{
+			"DELETE FROM refresh_tokens WHERE user_id = $1",
+			"DELETE FROM password_reset_tokens WHERE user_id = $1",
+			"DELETE FROM email_verification_tokens WHERE user_id = $1",
+		} {
+			if _, err := tx.Exec(stmt, u.ID); err != nil {
+				return nil, apperrors.DatabaseError(err)
+			}
+		}
+		if _, err := tx.Exec(
+			"UPDATE users SET password = $1, email_verified = TRUE WHERE id = $2",
+			oauthPlaceholderPassword(provider, providerUserID), u.ID,
+		); err != nil {
+			return nil, apperrors.DatabaseError(err)
+		}
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, $2, $3)", u.ID, provider, providerUserID,
+	); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, apperrors.DatabaseError(err)
+	}
+	return s.GetUserByID(u.ID)
 }
 
 // ---- Admin operations ----

@@ -273,7 +273,7 @@ A `JWT_SECRET` that is the placeholder from `.env.example`, or shorter than 32 c
 
 ### PostgreSQL (production)
 
-Schema is applied via the numbered files in `migrations/` (`001` – `013`, each with a `.down.sql`; mounted as Postgres init scripts in `docker-compose.yml`). Full-text search uses `tsvector GENERATED ALWAYS` with a GIN index. `internal/database/schema_postgres.sql` holds the same schema in one file for tests and first-run setup; a test diffs the two so they can't drift apart.
+Schema is applied via the numbered files in `migrations/` (`001` – `014`, each with a `.down.sql`; mounted as Postgres init scripts in `docker-compose.yml`). Full-text search uses `tsvector GENERATED ALWAYS` with a GIN index. `internal/database/schema_postgres.sql` holds the same schema in one file for tests and first-run setup; a test diffs the two so they can't drift apart.
 
 ### SQLite (development)
 
@@ -362,6 +362,7 @@ GitHub Actions on every push to `main` / `develop` and on pull requests to `main
 - WebSocket authenticates with a first-frame token, never a URL parameter
 - Per-IP and per-user rate limits (Redis-backed with an in-process fallback), with stricter limits on credential, email and upload endpoints; forwarding headers are only trusted when `TRUST_PROXY` is set
 - Password reset never reveals whether an email exists, and resets revoke all outstanding refresh tokens
+- GitHub sign-in links to an existing account only through an email GitHub has **verified** (never the profile's public email); if that account's email was never verified on our side - registration doesn't require it - linking also revokes its password, sessions and outstanding tokens, so whoever created it on someone else's address can't keep access. A banned user can't sign in this way either, and a failed lookup at GitHub never creates an account
 - OAuth state-cookie CSRF protection on the GitHub login flow
 - Uploads are validated by their magic bytes (not their name or declared type), stored under a generated key, and capped at 5 MB as they stream
 - Outgoing mail refuses header injection (CR/LF in any header value) and encodes non-ASCII subjects
