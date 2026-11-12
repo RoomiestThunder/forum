@@ -1,21 +1,27 @@
+import { lazy, useEffect } from 'react'
 import { Link, Route, Routes } from 'react-router'
 import Layout from './components/Layout'
 import RequireAuth from './components/RequireAuth'
-import Admin from './pages/Admin'
 import Feed from './pages/Feed'
-import ForgotPassword from './pages/ForgotPassword'
-import Login from './pages/Login'
-import MessageThread from './pages/MessageThread'
-import Messages from './pages/Messages'
-import OAuthCallback from './pages/OAuthCallback'
-import PostDetail from './pages/PostDetail'
-import PostEditor from './pages/PostEditor'
-import Profile from './pages/Profile'
-import Register from './pages/Register'
-import ResetPassword from './pages/ResetPassword'
-import Search from './pages/Search'
-import Settings from './pages/Settings'
-import VerifyEmail from './pages/VerifyEmail'
+
+// Everything except the landing page is loaded on demand, so a visitor
+// downloads the code for the page they open rather than the whole app - most of
+// all PostDetail, which carries the markdown renderer.
+const loadPostDetail = () => import('./pages/PostDetail')
+const PostDetail = lazy(loadPostDetail)
+const PostEditor = lazy(() => import('./pages/PostEditor'))
+const Login = lazy(() => import('./pages/Login'))
+const Register = lazy(() => import('./pages/Register'))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
+const ResetPassword = lazy(() => import('./pages/ResetPassword'))
+const VerifyEmail = lazy(() => import('./pages/VerifyEmail'))
+const OAuthCallback = lazy(() => import('./pages/OAuthCallback'))
+const Profile = lazy(() => import('./pages/Profile'))
+const Search = lazy(() => import('./pages/Search'))
+const Messages = lazy(() => import('./pages/Messages'))
+const MessageThread = lazy(() => import('./pages/MessageThread'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Admin = lazy(() => import('./pages/Admin'))
 
 function NotFound() {
   return (
@@ -30,6 +36,19 @@ function NotFound() {
 }
 
 function App() {
+  // The feed is where almost everyone lands, and opening a post is the next thing
+  // they do. Fetch that page's code once the browser is idle, after the feed has
+  // rendered, so the click doesn't wait on the largest chunk but the first load
+  // doesn't pay for it either.
+  useEffect(() => {
+    const idle = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 1500))
+    const handle = idle(() => void loadPostDetail())
+    return () => {
+      if (window.cancelIdleCallback) window.cancelIdleCallback(handle)
+      else window.clearTimeout(handle)
+    }
+  }, [])
+
   return (
     <Routes>
       <Route element={<Layout />}>

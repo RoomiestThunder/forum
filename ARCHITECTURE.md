@@ -43,7 +43,7 @@ Redis, MinIO, SMTP, and GitHub OAuth are all optional dependencies. Each follows
 - **internal/metrics** — Prometheus counters/histograms and the `/metrics` handler.
 - **internal/middleware** — security headers and the in-process token-bucket rate limiter.
 - **internal/errors** — typed `AppError` with HTTP status mapping.
-- **web/** — the SPA. `lib/api.ts` is the fetch wrapper (attaches the bearer token, refreshes it once on a 401 and shares that refresh among concurrent requests); `lib/queries.ts` holds all TanStack Query hooks; `stores/auth.ts` is the Zustand store persisting tokens to `localStorage`.
+- **web/** — the SPA. `lib/api.ts` is the fetch wrapper (attaches the bearer token, refreshes it once on a 401 and shares that refresh among concurrent requests); `lib/queries.ts` holds all TanStack Query hooks; `stores/auth.ts` is the Zustand store persisting tokens to `localStorage`. Pages other than the feed are loaded on demand (`React.lazy`), with one `Suspense` and an error boundary inside the layout so the header stays put while a page's code downloads; most importantly the post page, which carries the markdown renderer, is a separate chunk that is fetched when the browser is idle after the feed has rendered. A chunk that fails to load - typically a tab left open across a deploy, whose hashed chunk names no longer exist - shows a reload prompt instead of a blank page.
 
 ## Design Patterns
 

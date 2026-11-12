@@ -1,8 +1,10 @@
-import { useState } from 'react'
-import { Link, Outlet, useNavigate } from 'react-router'
+import { Suspense, useState } from 'react'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router'
 import { Moon, Sun, PenSquare, LogOut, MessagesSquare, Search, ShieldCheck } from 'lucide-react'
 import MessagesIcon from './MessagesIcon'
 import NotificationBell from './NotificationBell'
+import PageSpinner from './PageSpinner'
+import RouteErrorBoundary from './RouteErrorBoundary'
 import SearchBox from './SearchBox'
 import { logout } from '../lib/api'
 import { useMe } from '../lib/queries'
@@ -33,6 +35,7 @@ function ThemeToggle() {
 
 export default function Layout() {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const username = useAuth((s) => s.username)
   const { data: me } = useMe()
   const isStaff = !!me && (me.is_admin || me.is_moderator)
@@ -111,7 +114,13 @@ export default function Layout() {
         </div>
       </header>
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-6">
-        <Outlet />
+        {/* Pages load on demand. The Suspense sits here, not around the router, so
+            the header stays put while a page's code downloads. */}
+        <RouteErrorBoundary resetKey={pathname}>
+          <Suspense fallback={<PageSpinner />}>
+            <Outlet />
+          </Suspense>
+        </RouteErrorBoundary>
       </main>
       <footer className="border-t border-zinc-200 py-4 text-center text-sm text-zinc-400 dark:border-zinc-800 dark:text-zinc-600">
         Forum — built with Go &amp; React
